@@ -1,3 +1,0 @@
-aiogram>=3.31,<4
-gspread>=6.0,<7
-google-auth>=2.0,<3
