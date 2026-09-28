@@ -28,6 +28,9 @@ UNIVERSITY_URL = "https://mi.university/"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 SITE_PHOTO = "university_site.png"
 OPEN_DAY_PHOTO = "open_day.png"
+MANAGER_USERNAME = "artemMIU"
+MANAGER_NAME = "Артем"
+MANAGER_URL = f"https://t.me/{MANAGER_USERNAME}"
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
 
 if not BOT_TOKEN:
@@ -911,6 +914,19 @@ async def open_skip(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
         "Спасибо! Если захотите записаться позже, снова обратитесь к боту."
+    )
+    await callback.message.answer(
+        f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n\n"
+        "По вопросам можно связаться напрямую:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"💬 Написать {MANAGER_NAME}",
+                    url=MANAGER_URL,
+                )]
+            ]
+        ),
     )
     await state.clear()
 
