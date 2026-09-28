@@ -916,7 +916,8 @@ async def open_skip(callback: CallbackQuery, state: FSMContext):
         "Спасибо! Если захотите записаться позже, снова обратитесь к боту."
     )
     await callback.message.answer(
-        f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n\n"
+        f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
+        f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
         "По вопросам можно связаться напрямую:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
