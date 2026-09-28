@@ -25,6 +25,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID")
 UNIVERSITY_URL = "https://mi.university/"
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+SITE_PHOTO = "university_site.png"
+OPEN_DAY_PHOTO = "open_day.png"
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
 
 if not BOT_TOKEN:
@@ -402,24 +404,27 @@ def open_day_times_keyboard(selected_date: datetime.date) -> InlineKeyboardMarku
 
 
 async def offer_open_day(message: Message, state: FSMContext):
-    await message.answer(
+    caption = (
         "🚪 <b>День открытых дверей</b>\n\n"
         "Хотите записаться на День открытых дверей?\n\n"
         "📅 Пн–Пт: 09:00–19:00\n"
         "📅 Сб: 10:00–16:00\n"
         "📅 Вс: выходной\n\n"
-        "Доступны часовые слоты.",
-        parse_mode="HTML",
+        "Доступны часовые слоты."
+    )
+
+    try:
+        with open(OPEN_DAY_PHOTO, "rb") as photo:
+            await message.answer_photo(photo, caption=caption, parse_mode="HTML")
+    except FileNotFoundError:
+        await message.answer(caption, parse_mode="HTML")
+
+    await message.answer(
+        "Выберите действие:",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="✅ Записаться",
-                    callback_data="open_start",
-                )],
-                [InlineKeyboardButton(
-                    text="⏭️ Не записываться",
-                    callback_data="open_skip",
-                )],
+                [InlineKeyboardButton(text="✅ Записаться", callback_data="open_start")],
+                [InlineKeyboardButton(text="⏭️ Не записываться", callback_data="open_skip")],
             ]
         ),
     )
@@ -489,10 +494,21 @@ async def start(message: Message, state: FSMContext):
     await state.clear()
     await state.update_data(consent_phone=None)
 
+    opening_text = (
+        "🎓 <b>Добро пожаловать!</b>\n\n"
+        "Пройдите бота до конца — это поможет нам оформить для вас "
+        "<b>индивидуальный именной сертификат</b>.\n\n"
+        "Перед началом необходимо ваше согласие на обработку персональных данных."
+    )
+
+    try:
+        with open(SITE_PHOTO, "rb") as photo:
+            await message.answer_photo(photo, caption=opening_text, parse_mode="HTML")
+    except FileNotFoundError:
+        await message.answer(opening_text, parse_mode="HTML")
+
     await message.answer(
-        "👋 <b>Здравствуйте!</b>\n\n"
-        "Перед началом необходимо ваше согласие:\n\n"
-        f"<i>{esc(CONSENT_TEXT)}</i>",
+        f"<b>{esc(CONSENT_TEXT)}</b>",
         parse_mode="HTML",
         reply_markup=start_keyboard(),
     )
@@ -567,12 +583,33 @@ async def save_contact(message: Message, state: FSMContext):
         )
         return
 
-    # Сразу после согласия и передачи контакта отправляем сайт.
+    # После согласия и передачи контакта отправляем фото и сайт университета.
     await message.answer(
-        "🎓 Спасибо!\n\n"
-        "Сайт Московского международного университета:\n"
-        f"{UNIVERSITY_URL}",
+        "🎓 <b>Спасибо!</b>\n\n"
+        "Познакомьтесь с Московским международным университетом.",
+        parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
+    )
+
+    try:
+        with open(SITE_PHOTO, "rb") as photo:
+            await message.answer_photo(
+                photo,
+                caption="🌐 <b>Московский международный университет</b>",
+                parse_mode="HTML",
+            )
+    except FileNotFoundError:
+        pass
+
+    await message.answer(
+        "🌐 <b>Официальный сайт:</b>",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(
+                text="🏫 Открыть сайт ММУ",
+                url=UNIVERSITY_URL,
+            )]]
+        ),
     )
 
     # После этого продолжаем анкету.
