@@ -31,6 +31,7 @@ OPEN_DAY_PHOTO = "open_day.png"
 MANAGER_USERNAME = "artemMIU"
 MANAGER_NAME = "Артем"
 MANAGER_URL = f"https://t.me/{MANAGER_USERNAME}"
+UNIVERSITY_ADDRESS = "Ленинградский проспект, д. 17"
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
 
 if not BOT_TOKEN:
@@ -482,8 +483,21 @@ async def finish_open_day(message: Message, state: FSMContext):
         await message.answer(
             "✅ <b>Вы записаны!</b>\n\n"
             f"📅 {esc(appointment_text)}\n\n"
-            "Ждём вас на Дне открытых дверей.",
+            "Ждём вас на Дне открытых дверей.\n\n"
+            f"📍 <b>Адрес:</b> {UNIVERSITY_ADDRESS}\n\n"
+            f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
+            f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
+            "По вопросам об университете, записи или анкете "
+            "можете связаться со мной напрямую.",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=f"💬 Написать {MANAGER_NAME}",
+                        url=MANAGER_URL,
+                    )]
+                ]
+            ),
         )
     else:
         await message.answer(
