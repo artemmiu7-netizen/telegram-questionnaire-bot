@@ -1,7 +1,8 @@
 import html
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
@@ -23,6 +24,7 @@ from aiogram.types import (
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID")
 UNIVERSITY_URL = "https://mi.university/"
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
 
 if not BOT_TOKEN:
@@ -70,11 +72,13 @@ class Form(StatesGroup):
     name = State()
     patronymic = State()
     student_phone = State()
-    parent_phone = State()
     exams = State()
     career = State()
     other_career = State()
     summary = State()
+    open_day_offer = State()
+    open_day_date = State()
+    open_day_time = State()
 
 
 bot = Bot(BOT_TOKEN)
@@ -191,7 +195,7 @@ def summary_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="🏫 Изменить школу", callback_data="edit:school")],
             [InlineKeyboardButton(text="🎓 Изменить класс", callback_data="edit:class")],
             [InlineKeyboardButton(text="👤 Изменить ФИО", callback_data="edit:name")],
-            [InlineKeyboardButton(text="📱 Изменить телефоны", callback_data="edit:phones")],
+            [InlineKeyboardButton(text="📱 Изменить телефон", callback_data="edit:phones")],
             [InlineKeyboardButton(text="📝 Изменить ЕГЭ", callback_data="edit:exams")],
             [InlineKeyboardButton(text="💼 Изменить карьеру", callback_data="edit:career")],
             [InlineKeyboardButton(text="✅ Отправить анкету", callback_data="submit_form")],
@@ -255,16 +259,6 @@ async def ask_student_phone(message: Message, state: FSMContext):
     await state.set_state(Form.student_phone)
 
 
-async def ask_parent_phone(message: Message, state: FSMContext):
-    await message.answer(
-        "👨‍👩‍👦 <b>Телефон родителя</b>\n\n"
-        "Поделитесь номером кнопкой ниже или введите его вручную.",
-        parse_mode="HTML",
-        reply_markup=phone_share_keyboard(),
-    )
-    await state.set_state(Form.parent_phone)
-
-
 async def ask_exams(message: Message, state: FSMContext):
     data = await state.get_data()
     await message.answer(
@@ -301,7 +295,6 @@ async def show_summary(message: Message, state: FSMContext):
         f"👤 <b>Имя:</b> {esc(data.get('name'))}\n"
         f"👤 <b>Отчество:</b> {esc(data.get('patronymic'))}\n\n"
         f"📱 <b>Телефон ученика:</b> {esc(data.get('student_phone'))}\n"
-        f"👨‍👩‍👦 <b>Телефон родителя:</b> {esc(data.get('parent_phone'))}\n\n"
         f"📝 <b>ЕГЭ:</b>\n{exams}\n\n"
         f"💼 <b>Карьера:</b>\n{careers}\n",
         parse_mode="HTML",
@@ -331,10 +324,161 @@ def build_admin_message(data, user, consent_phone: str) -> str:
         f"🎓 {esc(data.get('class_number'))}\n"
         f"👤 {esc(data.get('surname'))} {esc(data.get('name'))} {esc(data.get('patronymic'))}\n"
         f"📱 {esc(data.get('student_phone'))}\n"
-        f"👨‍👩‍👦 {esc(data.get('parent_phone'))}\n"
         f"📝 {exams}\n"
         f"💼 {careers}"
     )
+
+
+# ============================================================
+# ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ
+# ============================================================
+def next_open_days(days_ahead: int = 14):
+    """Возвращает ближайшие даты Пн–Сб; воскресенье не показывается."""
+    today = datetime.now(MOSCOW_TZ).date()
+    dates = []
+
+    for offset in range(days_ahead):
+        day = today + timedelta(days=offset)
+        # weekday(): Пн=0 ... Вс=6
+        if day.weekday() != 6:
+            dates.append(day)
+
+    return dates
+
+
+def open_day_dates_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    dates = next_open_days(14)
+
+    weekday_names = [
+        "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"
+    ]
+
+    for day in dates:
+        label = f"{weekday_names[day.weekday()]} {day.strftime('%d.%m')}"
+        rows.append([
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"open_date:{day.isoformat()}",
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            text="⏭️ Не записываться",
+            callback_data="open_skip",
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def open_day_times_keyboard(selected_date: datetime.date) -> InlineKeyboardMarkup:
+    # Часовые слоты: Пн–Пт 09:00–18:00, Сб 10:00–15:00.
+    if selected_date.weekday() < 5:
+        hours = range(9, 18)  # последний старт 17:00, окончание в 18:00
+    elif selected_date.weekday() == 5:
+        hours = range(10, 15)  # последний старт 14:00, окончание в 15:00
+    else:
+        hours = []
+
+    rows = []
+    for hour in hours:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{hour:02d}:00",
+                callback_data=f"open_time:{hour:02d}:00",
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад к датам",
+            callback_data="open_time_back",
+        )
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def offer_open_day(message: Message, state: FSMContext):
+    await message.answer(
+        "🚪 <b>День открытых дверей</b>\n\n"
+        "Хотите записаться на День открытых дверей?\n\n"
+        "📅 Пн–Пт: 09:00–18:00\n"
+        "📅 Сб: 10:00–15:00\n"
+        "📅 Вс: выходной\n\n"
+        "Доступны часовые слоты.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="✅ Записаться",
+                    callback_data="open_start",
+                )],
+                [InlineKeyboardButton(
+                    text="⏭️ Не записываться",
+                    callback_data="open_skip",
+                )],
+            ]
+        ),
+    )
+    await state.set_state(Form.open_day_offer)
+
+
+async def finish_open_day(message: Message, state: FSMContext):
+    data = await state.get_data()
+    open_date = data.get("open_day_date")
+    open_time = data.get("open_day_time")
+
+    user = message.from_user
+    if open_date and open_time:
+        try:
+            selected = datetime.fromisoformat(open_date).date()
+        except ValueError:
+            selected = None
+
+        if selected:
+            weekday_names_full = [
+                "понедельник", "вторник", "среда",
+                "четверг", "пятница", "суббота", "воскресенье"
+            ]
+            appointment_text = (
+                f"{weekday_names_full[selected.weekday()]}, "
+                f"{selected.strftime('%d.%m.%Y')} в {open_time}"
+            )
+        else:
+            appointment_text = f"{open_date} {open_time}"
+
+        username = f"@{user.username}" if user.username else "не указан"
+        full_name = " ".join(
+            x for x in [user.first_name, user.last_name] if x
+        ) or "не указано"
+
+        await bot.send_message(
+            ADMIN_ID,
+            "🚪 <b>ЗАПИСЬ НА ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            f"👤 <b>Имя:</b> {esc(full_name)}\n"
+            f"💬 <b>Telegram:</b> {esc(username)}\n"
+            f"🆔 <b>Telegram ID:</b> {user.id}\n"
+            f"📱 <b>Телефон:</b> {esc(data.get('consent_phone'))}\n"
+            f"📅 <b>Дата и время:</b> {esc(appointment_text)}",
+            parse_mode="HTML",
+        )
+
+        await message.answer(
+            "✅ <b>Вы записаны!</b>\n\n"
+            f"📅 {esc(appointment_text)}\n\n"
+            "Ждём вас на Дне открытых дверей.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            "Спасибо! Будем рады видеть вас в Московском международном университете."
+        )
+
+    await state.clear()
 
 
 # ============================================================
@@ -503,7 +647,7 @@ async def patronymic(message: Message, state: FSMContext):
 @dp.message(Form.student_phone, F.contact)
 async def student_phone_contact(message: Message, state: FSMContext):
     await state.update_data(student_phone=message.contact.phone_number)
-    await ask_parent_phone(message, state)
+    await ask_exams(message, state)
 
 
 @dp.message(Form.student_phone)
@@ -512,21 +656,6 @@ async def student_phone_text(message: Message, state: FSMContext):
         await ask_patronymic(message, state)
         return
     await state.update_data(student_phone=message.text.strip())
-    await ask_parent_phone(message, state)
-
-
-@dp.message(Form.parent_phone, F.contact)
-async def parent_phone_contact(message: Message, state: FSMContext):
-    await state.update_data(parent_phone=message.contact.phone_number)
-    await ask_exams(message, state)
-
-
-@dp.message(Form.parent_phone)
-async def parent_phone_text(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await ask_student_phone(message, state)
-        return
-    await state.update_data(parent_phone=message.text.strip())
     await ask_exams(message, state)
 
 
@@ -568,7 +697,7 @@ async def exams_done(callback: CallbackQuery, state: FSMContext):
 async def exams_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.delete()
-    await ask_parent_phone(callback.message, state)
+    await ask_student_phone(callback.message, state)
 
 
 @dp.callback_query(Form.career, F.data.startswith("career:"))
@@ -706,7 +835,7 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
         "Спасибо за заполнение!",
         parse_mode="HTML",
     )
-    await state.clear()
+    await offer_open_day(callback.message, state)
 
 
 @dp.callback_query(Form.summary, F.data == "cancel_form")
@@ -717,6 +846,84 @@ async def cancel_form(callback: CallbackQuery, state: FSMContext):
         "❌ Заполнение анкеты отменено.\n\n"
         "Чтобы начать снова, нажмите /start."
     )
+
+
+# ============================================================
+# ЗАПИСЬ НА ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ
+# ============================================================
+@dp.callback_query(Form.open_day_offer, F.data == "open_start")
+async def open_start(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "📅 <b>Выберите дату</b>\n\n"
+        "Воскресенье — выходной и не предлагается.",
+        parse_mode="HTML",
+        reply_markup=open_day_dates_keyboard(),
+    )
+    await state.set_state(Form.open_day_date)
+
+
+@dp.callback_query(Form.open_day_offer, F.data == "open_skip")
+async def open_skip(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "Спасибо! Если захотите записаться позже, снова обратитесь к боту."
+    )
+    await state.clear()
+
+
+@dp.callback_query(Form.open_day_date, F.data.startswith("open_date:"))
+async def open_date_selected(callback: CallbackQuery, state: FSMContext):
+    raw_date = callback.data.split(":", 1)[1]
+
+    try:
+        selected_date = datetime.fromisoformat(raw_date).date()
+    except ValueError:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
+
+    # Дополнительная защита от воскресенья и прошедших дат.
+    today = datetime.now(MOSCOW_TZ).date()
+    if selected_date < today or selected_date.weekday() == 6:
+        await callback.answer("Эта дата недоступна.", show_alert=True)
+        return
+
+    await state.update_data(open_day_date=selected_date.isoformat())
+    await callback.answer()
+
+    weekday_names_full = [
+        "понедельник", "вторник", "среда",
+        "четверг", "пятница", "суббота", "воскресенье"
+    ]
+
+    await callback.message.edit_text(
+        f"🗓 <b>{weekday_names_full[selected_date.weekday()]}, "
+        f"{selected_date.strftime('%d.%m.%Y')}</b>\n\n"
+        "Выберите время проведения:",
+        parse_mode="HTML",
+        reply_markup=open_day_times_keyboard(selected_date),
+    )
+    await state.set_state(Form.open_day_time)
+
+
+@dp.callback_query(Form.open_day_time, F.data == "open_time_back")
+async def open_time_back(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "📅 <b>Выберите дату</b>",
+        parse_mode="HTML",
+        reply_markup=open_day_dates_keyboard(),
+    )
+    await state.set_state(Form.open_day_date)
+
+
+@dp.callback_query(Form.open_day_time, F.data.startswith("open_time:"))
+async def open_time_selected(callback: CallbackQuery, state: FSMContext):
+    time_value = callback.data.split(":", 1)[1]
+    await state.update_data(open_day_time=time_value)
+    await callback.answer()
+
+    await finish_open_day(callback.message, state)
 
 
 @dp.message(Command("cancel"))
