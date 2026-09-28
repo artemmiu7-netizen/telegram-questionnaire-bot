@@ -415,9 +415,12 @@ async def offer_open_day(message: Message, state: FSMContext):
     )
 
     try:
-        with open(OPEN_DAY_PHOTO, "rb") as photo:
-            await message.answer_photo(photo, caption=caption, parse_mode="HTML")
-    except FileNotFoundError:
+        await message.answer_photo(
+            FSInputFile(OPEN_DAY_PHOTO),
+            caption=caption,
+            parse_mode="HTML",
+        )
+    except (FileNotFoundError, OSError):
         await message.answer(caption, parse_mode="HTML")
 
     await message.answer(
@@ -503,9 +506,12 @@ async def start(message: Message, state: FSMContext):
     )
 
     try:
-        with open(SITE_PHOTO, "rb") as photo:
-            await message.answer_photo(photo, caption=opening_text, parse_mode="HTML")
-    except FileNotFoundError:
+        await message.answer_photo(
+            FSInputFile(SITE_PHOTO),
+            caption=opening_text,
+            parse_mode="HTML",
+        )
+    except (FileNotFoundError, OSError):
         await message.answer(opening_text, parse_mode="HTML")
 
     await message.answer(
