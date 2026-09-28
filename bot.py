@@ -12,6 +12,7 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    FSInputFile,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -592,9 +593,8 @@ async def save_contact(message: Message, state: FSMContext):
     )
 
     try:
-        with open(SITE_PHOTO, "rb") as photo:
-            await message.answer_photo(
-                photo,
+        await message.answer_photo(
+            FSInputFile(SITE_PHOTO),
                 caption="🌐 <b>Московский международный университет</b>",
                 parse_mode="HTML",
             )
