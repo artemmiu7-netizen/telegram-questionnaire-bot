@@ -37,7 +37,7 @@ SITE_PHOTO = "university_site.png"
 OPEN_DAY_PHOTO = "open_day.png"
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
-DB_PATH = "bot_data.sqlite3"
+DB_PATH = "/data/bot.db"
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в переменных окружения.")
