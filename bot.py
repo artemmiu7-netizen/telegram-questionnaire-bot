@@ -374,11 +374,11 @@ def open_day_dates_keyboard() -> InlineKeyboardMarkup:
 
 
 def open_day_times_keyboard(selected_date: datetime.date) -> InlineKeyboardMarkup:
-    # Часовые слоты: Пн–Пт 09:00–18:00, Сб 10:00–15:00.
+    # Часовые слоты: Пн–Пт 09:00–19:00, Сб 10:00–16:00.
     if selected_date.weekday() < 5:
-        hours = range(9, 18)  # последний старт 17:00, окончание в 18:00
+        hours = range(9, 19)  # последний старт 18:00, окончание в 19:00
     elif selected_date.weekday() == 5:
-        hours = range(10, 15)  # последний старт 14:00, окончание в 15:00
+        hours = range(10, 16)  # последний старт 15:00, окончание в 16:00
     else:
         hours = []
 
@@ -405,8 +405,8 @@ async def offer_open_day(message: Message, state: FSMContext):
     await message.answer(
         "🚪 <b>День открытых дверей</b>\n\n"
         "Хотите записаться на День открытых дверей?\n\n"
-        "📅 Пн–Пт: 09:00–18:00\n"
-        "📅 Сб: 10:00–15:00\n"
+        "📅 Пн–Пт: 09:00–19:00\n"
+        "📅 Сб: 10:00–16:00\n"
         "📅 Вс: выходной\n\n"
         "Доступны часовые слоты.",
         parse_mode="HTML",
