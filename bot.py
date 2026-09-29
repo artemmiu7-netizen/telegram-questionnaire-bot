@@ -1,8 +1,10 @@
 import asyncio
 import html
+import json
 import logging
 import os
-import sqlite3
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -12,9 +14,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery,
-    FSInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    FSInputFile,
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
@@ -26,18 +28,17 @@ from aiogram.types import (
 # ============================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID_RAW = os.getenv("ADMIN_ID")
-
 UNIVERSITY_URL = "https://mi.university/"
-UNIVERSITY_ADDRESS = "Ленинградский проспект, д. 17"
-MANAGER_NAME = "Артем"
-MANAGER_USERNAME = "artemMIU"
-MANAGER_URL = f"https://t.me/{MANAGER_USERNAME}"
-MAP_URL = "https://www.google.com/maps/search/?api=1&query=Leningradsky+Prospekt+17+Moscow"
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 SITE_PHOTO = "university_site.png"
 OPEN_DAY_PHOTO = "open_day.png"
+MANAGER_USERNAME = "artemMIU"
+MANAGER_NAME = "Артем"
+MANAGER_URL = f"https://t.me/{MANAGER_USERNAME}"
+UNIVERSITY_ADDRESS = "Ленинградский проспект, д. 17"
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
-MOSCOW_TZ = ZoneInfo("Europe/Moscow")
-DB_PATH = "/data/bot.db"
+GOOGLE_SCRIPT_URL = os.getenv("GOOGLE_SCRIPT_URL", "")
+GOOGLE_SHEET_SECRET = os.getenv("GOOGLE_SHEET_SECRET", "")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в переменных окружения.")
@@ -51,9 +52,6 @@ except ValueError as exc:
     raise RuntimeError("ADMIN_ID должен быть числом.") from exc
 
 
-# ============================================================
-# СПРАВОЧНИКИ
-# ============================================================
 EXAMS = [
     "Обществознание",
     "Математика (профиль)",
@@ -77,128 +75,7 @@ CAREERS = [
     "Госслужба",
 ]
 
-WEEKDAYS = [
-    "понедельник",
-    "вторник",
-    "среда",
-    "четверг",
-    "пятница",
-    "суббота",
-    "воскресенье",
-]
-WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
-
-# ============================================================
-# БАЗА ДАННЫХ ДЛЯ ЗАПИСЕЙ И НАПОМИНАНИЙ
-# ============================================================
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    with get_db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS bookings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL UNIQUE,
-                username TEXT,
-                full_name TEXT,
-                phone TEXT,
-                date TEXT NOT NULL,
-                time TEXT NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1,
-                reminder_day_sent INTEGER NOT NULL DEFAULT 0,
-                reminder_morning_sent INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.commit()
-
-
-def get_active_booking(user_id: int):
-    with get_db() as conn:
-        return conn.execute(
-            "SELECT * FROM bookings WHERE user_id = ? AND active = 1",
-            (user_id,),
-        ).fetchone()
-
-
-def save_booking(user, phone: str, selected_date: str, selected_time: str):
-    now = datetime.now(MOSCOW_TZ).isoformat(timespec="seconds")
-    username = f"@{user.username}" if user.username else "не указан"
-    full_name = " ".join(
-        x for x in [user.first_name, user.last_name] if x
-    ) or "не указано"
-
-    with get_db() as conn:
-        conn.execute(
-            """
-            INSERT INTO bookings (
-                user_id, username, full_name, phone, date, time,
-                active, reminder_day_sent, reminder_morning_sent,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, 0, 0, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                username = excluded.username,
-                full_name = excluded.full_name,
-                phone = excluded.phone,
-                date = excluded.date,
-                time = excluded.time,
-                active = 1,
-                reminder_day_sent = 0,
-                reminder_morning_sent = 0,
-                updated_at = excluded.updated_at
-            """,
-            (
-                user.id,
-                username,
-                full_name,
-                phone,
-                selected_date,
-                selected_time,
-                now,
-                now,
-            ),
-        )
-        conn.commit()
-
-
-def cancel_booking(user_id: int):
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE bookings SET active = 0, updated_at = ? WHERE user_id = ? AND active = 1",
-            (datetime.now(MOSCOW_TZ).isoformat(timespec="seconds"), user_id),
-        )
-        conn.commit()
-
-
-def mark_day_reminder_sent(booking_id: int):
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE bookings SET reminder_day_sent = 1 WHERE id = ?",
-            (booking_id,),
-        )
-        conn.commit()
-
-
-def mark_morning_reminder_sent(booking_id: int):
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE bookings SET reminder_morning_sent = 1 WHERE id = ?",
-            (booking_id,),
-        )
-        conn.commit()
-
-
-# ============================================================
-# СОСТОЯНИЯ
-# ============================================================
 class Form(StatesGroup):
     consent = State()
     contact = State()
@@ -225,28 +102,101 @@ def esc(value) -> str:
     return html.escape(str(value or ""))
 
 
-def format_booking(booking) -> str:
-    selected = datetime.fromisoformat(booking["date"]).date()
-    return (
-        f"{WEEKDAYS[selected.weekday()]}, "
-        f"{selected.strftime('%d.%m.%Y')} в {booking['time']}"
+def _send_to_google_sheet(payload: dict) -> bool:
+    if not GOOGLE_SCRIPT_URL or not GOOGLE_SHEET_SECRET:
+        logging.warning("Google Sheets не настроены: GOOGLE_SCRIPT_URL/GOOGLE_SHEET_SECRET пусты.")
+        return False
+
+    body = json.dumps(
+        {**payload, "secret": GOOGLE_SHEET_SECRET},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    request = urllib.request.Request(
+        GOOGLE_SCRIPT_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            result = response.read().decode("utf-8", errors="replace")
+        logging.info("Google Sheets response: %s", result)
+        return True
+    except (urllib.error.URLError, TimeoutError) as exc:
+        logging.exception("Не удалось передать данные в Google Sheets: %s", exc)
+        return False
+    except Exception:
+        logging.exception("Ошибка при передаче данных в Google Sheets.")
+        return False
+
+
+async def sync_contact_to_google(user, phone: str):
+    await asyncio.to_thread(
+        _send_to_google_sheet,
+        {
+            "action": "contact",
+            "telegram_id": user.id,
+            "username": f"@{user.username}" if user.username else "",
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "phone": phone,
+            "consent": "Да",
+        },
     )
 
 
-def user_name(user) -> str:
-    return " ".join(
-        x for x in [user.first_name, user.last_name] if x
-    ) or "не указано"
+async def sync_form_to_google(data: dict, user):
+    await asyncio.to_thread(
+        _send_to_google_sheet,
+        {
+            "action": "questionnaire",
+            "telegram_id": user.id,
+            "username": f"@{user.username}" if user.username else "",
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "consent_phone": data.get("consent_phone", ""),
+            "school": data.get("school", ""),
+            "class_number": data.get("class_number", ""),
+            "surname": data.get("surname", ""),
+            "name": data.get("name", ""),
+            "patronymic": data.get("patronymic", ""),
+            "student_phone": data.get("student_phone", ""),
+            "exams": ", ".join(data.get("exams", [])),
+            "career": ", ".join(data.get("career", [])),
+            "consent": "Да",
+        },
+    )
 
 
-# ============================================================
-# КЛАВИАТУРЫ
-# ============================================================
+async def sync_booking_to_google(user, data: dict, status="Записан"):
+    await asyncio.to_thread(
+        _send_to_google_sheet,
+        {
+            "action": "booking",
+            "telegram_id": user.id,
+            "username": f"@{user.username}" if user.username else "",
+            "booking_date": data.get("open_day_date", ""),
+            "booking_time": data.get("open_day_time", ""),
+            "booking_status": status,
+        },
+    )
+
+
 def start_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Дать согласие", callback_data="consent_yes")],
-            [InlineKeyboardButton(text="❌ Не согласен(на)", callback_data="consent_no")],
+            [InlineKeyboardButton(
+                text="✅ Дать согласие",
+                callback_data="consent_yes",
+            )],
+            [InlineKeyboardButton(
+                text="❌ Не согласен(на)",
+                callback_data="consent_no",
+            )],
         ]
     )
 
@@ -254,7 +204,10 @@ def start_keyboard() -> InlineKeyboardMarkup:
 def phone_share_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📱 Поделиться номером Telegram", request_contact=True)],
+            [KeyboardButton(
+                text="📱 Поделиться номером Telegram",
+                request_contact=True,
+            )],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -264,7 +217,10 @@ def phone_share_keyboard() -> ReplyKeyboardMarkup:
 def back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")]
+            [InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data="back",
+            )]
         ]
     )
 
@@ -277,41 +233,56 @@ def class_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="10", callback_data="class:10"),
                 InlineKeyboardButton(text="11", callback_data="class:11"),
             ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")],
+            [InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data="back",
+            )],
         ]
     )
 
 
 def exams_keyboard(selected=None) -> InlineKeyboardMarkup:
     selected = selected or []
-    rows = [
-        [InlineKeyboardButton(
-            text=f"{'✅' if item in selected else '⬜'} {item}",
-            callback_data=f"exam:{item}",
-        )]
-        for item in EXAMS
-    ]
-    rows += [
-        [InlineKeyboardButton(text="✅ Готово", callback_data="exam_done")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")],
-    ]
+    rows = []
+
+    for item in EXAMS:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{'✅' if item in selected else '⬜'} {item}",
+                callback_data=f"exam:{item}",
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(text="✅ Готово", callback_data="exam_done")
+    ])
+    rows.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back")
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def careers_keyboard(selected=None) -> InlineKeyboardMarkup:
     selected = selected or []
-    rows = [
-        [InlineKeyboardButton(
-            text=f"{'✅' if item in selected else '⬜'} {item}",
-            callback_data=f"career:{item}",
-        )]
-        for item in CAREERS
-    ]
-    rows += [
-        [InlineKeyboardButton(text="✏️ Другое", callback_data="career_other")],
-        [InlineKeyboardButton(text="✅ Готово", callback_data="career_done")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="back")],
-    ]
+    rows = []
+
+    for item in CAREERS:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{'✅' if item in selected else '⬜'} {item}",
+                callback_data=f"career:{item}",
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton(text="✏️ Другое", callback_data="career_other")
+    ])
+    rows.append([
+        InlineKeyboardButton(text="✅ Готово", callback_data="career_done")
+    ])
+    rows.append([
+        InlineKeyboardButton(text="⬅️ Назад", callback_data="back")
+    ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -330,37 +301,6 @@ def summary_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def open_day_offer_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Записаться", callback_data="open_start")],
-            [InlineKeyboardButton(text="⏭️ Не записываться", callback_data="open_skip")],
-        ]
-    )
-
-
-def booking_manage_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Изменить запись", callback_data="booking_change")],
-            [InlineKeyboardButton(text="❌ Отменить запись", callback_data="booking_cancel")],
-            [InlineKeyboardButton(text="💬 Написать Артему", url=MANAGER_URL)],
-        ]
-    )
-
-
-def admin_booking_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="👤 Открыть профиль", url=f"tg://user?id={user_id}")],
-            [InlineKeyboardButton(text="❌ Отменить запись", callback_data=f"admin_cancel:{user_id}")],
-        ]
-    )
-
-
-# ============================================================
-# ВОПРОСЫ АНКЕТЫ
-# ============================================================
 async def ask_school(message: Message, state: FSMContext):
     await message.answer(
         "🏫 <b>Школа</b>\n\nВведите название школы:",
@@ -389,18 +329,26 @@ async def ask_surname(message: Message, state: FSMContext):
 
 
 async def ask_name(message: Message, state: FSMContext):
-    await message.answer("👤 Теперь введите имя:", parse_mode="HTML", reply_markup=back_keyboard())
+    await message.answer(
+        "👤 Теперь введите имя:",
+        parse_mode="HTML",
+        reply_markup=back_keyboard(),
+    )
     await state.set_state(Form.name)
 
 
 async def ask_patronymic(message: Message, state: FSMContext):
-    await message.answer("👤 Теперь введите отчество:", parse_mode="HTML", reply_markup=back_keyboard())
+    await message.answer(
+        "👤 Теперь введите отчество:",
+        parse_mode="HTML",
+        reply_markup=back_keyboard(),
+    )
     await state.set_state(Form.patronymic)
 
 
 async def ask_student_phone(message: Message, state: FSMContext):
     await message.answer(
-        "📱 <b>Телефон</b>\n\n"
+        "📱 <b>Телефон ученика</b>\n\n"
         "Поделитесь номером кнопкой ниже или введите его вручную.",
         parse_mode="HTML",
         reply_markup=phone_share_keyboard(),
@@ -411,7 +359,8 @@ async def ask_student_phone(message: Message, state: FSMContext):
 async def ask_exams(message: Message, state: FSMContext):
     data = await state.get_data()
     await message.answer(
-        "📝 <b>ЕГЭ</b>\n\nВыберите один или несколько предметов:",
+        "📝 <b>ЕГЭ</b>\n\n"
+        "Выберите один или несколько предметов:",
         parse_mode="HTML",
         reply_markup=exams_keyboard(data.get("exams", [])),
     )
@@ -421,7 +370,8 @@ async def ask_exams(message: Message, state: FSMContext):
 async def ask_career(message: Message, state: FSMContext):
     data = await state.get_data()
     await message.answer(
-        "💼 <b>Карьерная сфера</b>\n\nВыберите один или несколько вариантов:",
+        "💼 <b>Карьерная сфера</b>\n\n"
+        "Выберите один или несколько вариантов:",
         parse_mode="HTML",
         reply_markup=careers_keyboard(data.get("career", [])),
     )
@@ -441,93 +391,110 @@ async def show_summary(message: Message, state: FSMContext):
         f"👤 <b>Фамилия:</b> {esc(data.get('surname'))}\n"
         f"👤 <b>Имя:</b> {esc(data.get('name'))}\n"
         f"👤 <b>Отчество:</b> {esc(data.get('patronymic'))}\n\n"
-        f"📱 <b>Телефон:</b> {esc(data.get('student_phone'))}\n\n"
+        f"📱 <b>Телефон ученика:</b> {esc(data.get('student_phone'))}\n"
         f"📝 <b>ЕГЭ:</b>\n{exams}\n\n"
-        f"💼 <b>Карьера:</b>\n{careers}",
+        f"💼 <b>Карьера:</b>\n{careers}\n",
         parse_mode="HTML",
         reply_markup=summary_keyboard(),
     )
     await state.set_state(Form.summary)
 
 
-def build_admin_form_message(data, user) -> str:
+def build_admin_message(data, user, consent_phone: str) -> str:
     username = f"@{user.username}" if user.username else "не указан"
-    full_name = user_name(user)
-    exams = ", ".join(data.get("exams", [])) or "не выбраны"
-    careers = ", ".join(data.get("career", [])) or "не выбраны"
-    booking = get_active_booking(user.id)
-    booking_text = format_booking(booking) if booking else "не выбрана"
+    full_name = " ".join(x for x in [user.first_name, user.last_name] if x) or "не указано"
+
+    exams = "\n".join(f"• {esc(x)}" for x in data.get("exams", [])) or "не выбраны"
+    careers = "\n".join(f"• {esc(x)}" for x in data.get("career", [])) or "не выбраны"
 
     return (
-        "🆕 <b>НОВАЯ ЗАЯВКА</b>\n"
+        "🆕 <b>НОВЫЙ ЛИД</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"👤 <b>Имя:</b> {esc(full_name)}\n"
         f"💬 <b>Telegram:</b> {esc(username)}\n"
         f"🆔 <b>Telegram ID:</b> {user.id}\n"
-        f"📱 <b>Телефон:</b> {esc(data.get('consent_phone') or data.get('student_phone'))}\n"
-        "🔐 <b>Согласие:</b> Да\n\n"
-        f"🏫 <b>Школа:</b> {esc(data.get('school'))}\n"
-        f"🎓 <b>Класс:</b> {esc(data.get('class_number'))}\n"
-        f"👤 <b>ФИО:</b> {esc(data.get('surname'))} {esc(data.get('name'))} {esc(data.get('patronymic'))}\n"
-        f"📝 <b>ЕГЭ:</b> {esc(exams)}\n"
-        f"💼 <b>Карьера:</b> {esc(careers)}\n"
-        f"🚪 <b>День открытых дверей:</b> {esc(booking_text)}"
+        f"📱 <b>Телефон Telegram:</b> {esc(consent_phone)}\n"
+        "🔐 <b>Согласие:</b> Да\n"
+        f"📅 <b>Время:</b> {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
+        "📋 <b>Анкета:</b>\n"
+        f"🏫 {esc(data.get('school'))}\n"
+        f"🎓 {esc(data.get('class_number'))}\n"
+        f"👤 {esc(data.get('surname'))} {esc(data.get('name'))} {esc(data.get('patronymic'))}\n"
+        f"📱 {esc(data.get('student_phone'))}\n"
+        f"📝 {exams}\n"
+        f"💼 {careers}"
     )
 
 
 # ============================================================
 # ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ
 # ============================================================
-def next_open_days(days_ahead: int = 21):
+def next_open_days(days_ahead: int = 14):
+    """Возвращает ближайшие даты Пн–Сб; воскресенье не показывается."""
     today = datetime.now(MOSCOW_TZ).date()
-    result = []
+    dates = []
+
     for offset in range(days_ahead):
         day = today + timedelta(days=offset)
+        # weekday(): Пн=0 ... Вс=6
         if day.weekday() != 6:
-            result.append(day)
-    return result
+            dates.append(day)
+
+    return dates
 
 
 def open_day_dates_keyboard() -> InlineKeyboardMarkup:
     rows = []
-    for day in next_open_days():
-        label = f"{WEEKDAYS_SHORT[day.weekday()]} {day.strftime('%d.%m')}"
+    dates = next_open_days(14)
+
+    weekday_names = [
+        "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"
+    ]
+
+    for day in dates:
+        label = f"{weekday_names[day.weekday()]} {day.strftime('%d.%m')}"
         rows.append([
-            InlineKeyboardButton(text=label, callback_data=f"open_date:{day.isoformat()}")
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"open_date:{day.isoformat()}",
+            )
         ])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="open_dates_back")])
+
+    rows.append([
+        InlineKeyboardButton(
+            text="⏭️ Не записываться",
+            callback_data="open_skip",
+        )
+    ])
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def valid_time_slots(selected_date):
+def open_day_times_keyboard(selected_date: datetime.date) -> InlineKeyboardMarkup:
+    # Часовые слоты: Пн–Пт 09:00–19:00, Сб 10:00–16:00.
     if selected_date.weekday() < 5:
-        start_hour, end_hour = 9, 19
+        hours = range(9, 19)  # последний старт 18:00, окончание в 19:00
     elif selected_date.weekday() == 5:
-        start_hour, end_hour = 10, 16
+        hours = range(10, 16)  # последний старт 15:00, окончание в 16:00
     else:
-        return []
+        hours = []
 
-    now = datetime.now(MOSCOW_TZ)
-    slots = []
-    for hour in range(start_hour, end_hour):
-        if selected_date == now.date() and hour <= now.hour:
-            continue
-        slots.append(f"{hour:02d}:00")
-    return slots
-
-
-def open_day_times_keyboard(selected_date) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=time_value, callback_data=f"open_time:{time_value}")]
-        for time_value in valid_time_slots(selected_date)
-    ]
-    if not rows:
+    rows = []
+    for hour in hours:
         rows.append([
-            InlineKeyboardButton(text="Нет доступного времени", callback_data="no_time")
+            InlineKeyboardButton(
+                text=f"{hour:02d}:00",
+                callback_data=f"open_time:{hour:02d}:00",
+            )
         ])
+
     rows.append([
-        InlineKeyboardButton(text="⬅️ Назад к датам", callback_data="open_time_back")
+        InlineKeyboardButton(
+            text="⬅️ Назад к датам",
+            callback_data="open_time_back",
+        )
     ])
+
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -538,7 +505,7 @@ async def offer_open_day(message: Message, state: FSMContext):
         "📅 Пн–Пт: 09:00–19:00\n"
         "📅 Сб: 10:00–16:00\n"
         "📅 Вс: выходной\n\n"
-        "Можно выбрать удобную дату и часовой слот."
+        "Доступны часовые слоты."
     )
 
     try:
@@ -552,24 +519,103 @@ async def offer_open_day(message: Message, state: FSMContext):
 
     await message.answer(
         "Выберите действие:",
-        reply_markup=open_day_offer_keyboard(),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Записаться", callback_data="open_start")],
+                [InlineKeyboardButton(text="⏭️ Не записываться", callback_data="open_skip")],
+            ]
+        ),
     )
     await state.set_state(Form.open_day_offer)
 
 
+async def finish_open_day(message: Message, state: FSMContext):
+    data = await state.get_data()
+    open_date = data.get("open_day_date")
+    open_time = data.get("open_day_time")
+
+    user = message.from_user
+    if open_date and open_time:
+        try:
+            selected = datetime.fromisoformat(open_date).date()
+        except ValueError:
+            selected = None
+
+        if selected:
+            weekday_names_full = [
+                "понедельник", "вторник", "среда",
+                "четверг", "пятница", "суббота", "воскресенье"
+            ]
+            appointment_text = (
+                f"{weekday_names_full[selected.weekday()]}, "
+                f"{selected.strftime('%d.%m.%Y')} в {open_time}"
+            )
+        else:
+            appointment_text = f"{open_date} {open_time}"
+
+        username = f"@{user.username}" if user.username else "не указан"
+        full_name = " ".join(
+            x for x in [user.first_name, user.last_name] if x
+        ) or "не указано"
+
+        await bot.send_message(
+            ADMIN_ID,
+            "🚪 <b>ЗАПИСЬ НА ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            f"👤 <b>Имя:</b> {esc(full_name)}\n"
+            f"💬 <b>Telegram:</b> {esc(username)}\n"
+            f"🆔 <b>Telegram ID:</b> {user.id}\n"
+            f"📱 <b>Телефон:</b> {esc(data.get('consent_phone'))}\n"
+            f"📅 <b>Дата и время:</b> {esc(appointment_text)}",
+            parse_mode="HTML",
+        )
+
+        await sync_booking_to_google(
+            user,
+            {"open_day_date": open_date, "open_day_time": open_time},
+            status="Записан",
+        )
+
+        await message.answer(
+            "✅ <b>Вы записаны!</b>\n\n"
+            f"📅 {esc(appointment_text)}\n\n"
+            "Ждём вас на Дне открытых дверей.\n\n"
+            f"📍 <b>Адрес:</b> {UNIVERSITY_ADDRESS}\n\n"
+            f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
+            f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
+            "По вопросам об университете, записи или анкете "
+            "можете связаться со мной напрямую.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=f"💬 Написать {MANAGER_NAME}",
+                        url=MANAGER_URL,
+                    )]
+                ]
+            ),
+        )
+    else:
+        await message.answer(
+            "Спасибо! Будем рады видеть вас в Московском международном университете."
+        )
+
+    await state.clear()
+
+
 # ============================================================
-# /START И СОГЛАСИЕ
+# START: СНАЧАЛА СОГЛАСИЕ
 # ============================================================
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
+    await state.update_data(consent_phone=None)
 
     opening_text = (
-        "🎓 <b>Добро пожаловать в Московский международный университет!</b>\n\n"
-        "Пройдите короткую анкету — это поможет нам лучше понять ваши интересы "
-        "и подготовить для вас полезную информацию об университете.\n\n"
-        "Заполнение займёт всего несколько минут.\n\n"
-        "Перед началом необходимо дать согласие на обработку персональных данных."
+        "🎓 <b>Добро пожаловать!</b>\n\n"
+        "Пройдите короткий опросник до конца, чтобы мы могли "
+        "подобрать для вас полезную информацию об университете.\n\n"
+        "Перед началом необходимо ваше согласие на обработку персональных данных."
     )
 
     try:
@@ -594,11 +640,13 @@ async def consent_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
         "✅ <b>Согласие получено.</b>\n\n"
-        "Теперь поделитесь вашим номером Telegram.",
+        "Теперь поделитесь вашим номером Telegram.\n"
+        "Нажмите кнопку ниже.",
         parse_mode="HTML",
     )
     await callback.message.answer(
-        "📱 Нажмите кнопку «Поделиться номером Telegram».",
+        "📱 <b>Поделиться номером Telegram</b>",
+        parse_mode="HTML",
         reply_markup=phone_share_keyboard(),
     )
     await state.set_state(Form.contact)
@@ -610,34 +658,36 @@ async def consent_no(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
         "❌ Без согласия обработка данных невозможна.\n\n"
-        "Чтобы начать снова, нажмите /start."
+        "Чтобы начать заново, нажмите /start."
     )
 
 
 # ============================================================
-# КОНТАКТ ПОСЛЕ СОГЛАСИЯ
+# КОНТАКТ СРАЗУ ПОСЛЕ СОГЛАСИЯ
 # ============================================================
 @dp.message(Form.contact, F.contact)
 async def save_contact(message: Message, state: FSMContext):
     contact = message.contact
     user = message.from_user
 
+    # Принимаем только контакт самого пользователя.
     if contact.user_id is not None and contact.user_id != user.id:
         await message.answer(
-            "Пожалуйста, поделитесь именно своим номером.",
+            "Пожалуйста, отправьте именно свой номер телефона.",
             reply_markup=phone_share_keyboard(),
         )
         return
 
     phone = contact.phone_number
     await state.update_data(consent_phone=phone)
+    await sync_contact_to_google(user, phone)
 
     try:
         await bot.send_message(
             ADMIN_ID,
             (
                 "📩 <b>Новый контакт</b>\n\n"
-                f"👤 Имя: {esc(user_name(user))}\n"
+                f"👤 Имя: {esc(user.first_name or '')} {esc(user.last_name or '')}\n"
                 f"💬 Telegram: {esc('@' + user.username if user.username else 'не указан')}\n"
                 f"🆔 Telegram ID: {user.id}\n"
                 f"📱 Номер: {esc(phone)}\n"
@@ -648,11 +698,13 @@ async def save_contact(message: Message, state: FSMContext):
     except Exception:
         logging.exception("Не удалось отправить контакт администратору.")
         await message.answer(
-            "⚠️ Не удалось передать номер. Попробуйте ещё раз.",
+            "⚠️ Не удалось передать номер ответственному сотруднику. "
+            "Попробуйте ещё раз.",
             reply_markup=phone_share_keyboard(),
         )
         return
 
+    # После согласия и передачи контакта отправляем фото и сайт университета.
     await message.answer(
         "🎓 <b>Спасибо!</b>\n\n"
         "Познакомьтесь с Московским международным университетом.",
@@ -663,36 +715,24 @@ async def save_contact(message: Message, state: FSMContext):
     try:
         await message.answer_photo(
             FSInputFile(SITE_PHOTO),
-            caption="🌐 <b>Московский международный университет</b>",
-            parse_mode="HTML",
-        )
-    except (FileNotFoundError, OSError):
+                caption="🌐 <b>Московский международный университет</b>",
+                parse_mode="HTML",
+            )
+    except FileNotFoundError:
         pass
 
     await message.answer(
-        "📍 <b>Адрес университета:</b>\n"
-        f"{esc(UNIVERSITY_ADDRESS)}\n\n"
         "🌐 <b>Официальный сайт:</b>",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🏫 Открыть сайт ММУ", url=UNIVERSITY_URL)],
-                [InlineKeyboardButton(text="📍 Построить маршрут", url=MAP_URL)],
-            ]
+            inline_keyboard=[[InlineKeyboardButton(
+                text="🏫 Открыть сайт ММУ",
+                url=UNIVERSITY_URL,
+            )]]
         ),
     )
 
-    existing = get_active_booking(user.id)
-    if existing:
-        await message.answer(
-            "📅 <b>У вас уже есть запись:</b>\n\n"
-            f"{esc(format_booking(existing))}\n"
-            f"📍 {esc(UNIVERSITY_ADDRESS)}\n\n"
-            "Вы можете изменить её или отменить.",
-            parse_mode="HTML",
-            reply_markup=booking_manage_keyboard(),
-        )
-
+    # После этого продолжаем анкету.
     await message.answer("Теперь можно заполнить анкету.")
     await ask_school(message, state)
 
@@ -700,7 +740,7 @@ async def save_contact(message: Message, state: FSMContext):
 @dp.message(Form.contact)
 async def contact_not_shared(message: Message, state: FSMContext):
     await message.answer(
-        "Чтобы продолжить, нажмите «📱 Поделиться номером Telegram».",
+        "Чтобы продолжить, нажмите кнопку «📱 Поделиться номером Telegram».",
         reply_markup=phone_share_keyboard(),
     )
 
@@ -720,9 +760,10 @@ async def school(message: Message, state: FSMContext):
 
 @dp.callback_query(Form.class_number, F.data.startswith("class:"))
 async def class_selected(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(class_number=callback.data.split(":", 1)[1])
+    value = callback.data.split(":", 1)[1]
+    await state.update_data(class_number=value)
     await callback.answer()
-    await callback.message.edit_text(f"Класс: {esc((await state.get_data()).get('class_number'))}")
+    await callback.message.edit_text(f"Класс: {esc(value)}")
     await ask_surname(callback.message, state)
 
 
@@ -763,7 +804,6 @@ async def patronymic(message: Message, state: FSMContext):
 @dp.message(Form.student_phone, F.contact)
 async def student_phone_contact(message: Message, state: FSMContext):
     await state.update_data(student_phone=message.contact.phone_number)
-    await message.answer("✅ Номер сохранён.", reply_markup=ReplyKeyboardRemove())
     await ask_exams(message, state)
 
 
@@ -773,7 +813,6 @@ async def student_phone_text(message: Message, state: FSMContext):
         await ask_patronymic(message, state)
         return
     await state.update_data(student_phone=message.text.strip())
-    await message.answer("✅ Номер сохранён.", reply_markup=ReplyKeyboardRemove())
     await ask_exams(message, state)
 
 
@@ -781,22 +820,31 @@ async def student_phone_text(message: Message, state: FSMContext):
 async def exam_toggle(callback: CallbackQuery, state: FSMContext):
     item = callback.data.split(":", 1)[1]
     data = await state.get_data()
-    selected = list(data.get("exams", []))
+    selected = data.get("exams", [])
+
     if item in selected:
         selected.remove(item)
     else:
         selected.append(item)
+
     await state.update_data(exams=selected)
-    await callback.message.edit_reply_markup(reply_markup=exams_keyboard(selected))
+    await callback.message.edit_reply_markup(
+        reply_markup=exams_keyboard(selected)
+    )
     await callback.answer()
 
 
 @dp.callback_query(Form.exams, F.data == "exam_done")
 async def exams_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+
     if not data.get("exams"):
-        await callback.answer("Выберите хотя бы один предмет.", show_alert=True)
+        await callback.answer(
+            "Выберите хотя бы один предмет.",
+            show_alert=True,
+        )
         return
+
     await callback.answer()
     await callback.message.edit_text("✅ Предметы сохранены.")
     await ask_career(callback.message, state)
@@ -813,20 +861,26 @@ async def exams_back(callback: CallbackQuery, state: FSMContext):
 async def career_toggle(callback: CallbackQuery, state: FSMContext):
     item = callback.data.split(":", 1)[1]
     data = await state.get_data()
-    selected = list(data.get("career", []))
+    selected = data.get("career", [])
+
     if item in selected:
         selected.remove(item)
     else:
         selected.append(item)
+
     await state.update_data(career=selected)
-    await callback.message.edit_reply_markup(reply_markup=careers_keyboard(selected))
+    await callback.message.edit_reply_markup(
+        reply_markup=careers_keyboard(selected)
+    )
     await callback.answer()
 
 
 @dp.callback_query(Form.career, F.data == "career_other")
 async def career_other(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
-    await callback.message.edit_text("✏️ Напишите свой вариант сферы карьеры:")
+    await callback.message.edit_text(
+        "✏️ Напишите свой вариант сферы карьеры:",
+    )
     await state.set_state(Form.other_career)
 
 
@@ -835,6 +889,7 @@ async def other_career(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
         await ask_career(message, state)
         return
+
     data = await state.get_data()
     selected = [x for x in data.get("career", []) if not x.startswith("Другое:")]
     selected.append(f"Другое: {message.text.strip()}")
@@ -845,9 +900,14 @@ async def other_career(message: Message, state: FSMContext):
 @dp.callback_query(Form.career, F.data == "career_done")
 async def career_done(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
+
     if not data.get("career"):
-        await callback.answer("Выберите хотя бы один вариант.", show_alert=True)
+        await callback.answer(
+            "Выберите хотя бы один вариант.",
+            show_alert=True,
+        )
         return
+
     await callback.answer()
     await callback.message.edit_text("✅ Карьерная сфера сохранена.")
     await show_summary(callback.message, state)
@@ -861,7 +921,7 @@ async def career_back(callback: CallbackQuery, state: FSMContext):
 
 
 # ============================================================
-# РЕДАКТИРОВАНИЕ И ОТПРАВКА
+# РЕДАКТИРОВАНИЕ / ОТПРАВКА АНКЕТЫ
 # ============================================================
 @dp.callback_query(Form.summary, F.data == "edit:school")
 async def edit_school(callback: CallbackQuery, state: FSMContext):
@@ -909,33 +969,29 @@ async def edit_career(callback: CallbackQuery, state: FSMContext):
 async def submit_form(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = callback.from_user
+    consent_phone = data.get("consent_phone") or data.get("student_phone") or "не указан"
 
     try:
         await bot.send_message(
             ADMIN_ID,
-            build_admin_form_message(data, user),
+            build_admin_message(data, user, consent_phone),
             parse_mode="HTML",
-            reply_markup=(
-                admin_booking_keyboard(user.id)
-                if get_active_booking(user.id)
-                else InlineKeyboardMarkup(
-                    inline_keyboard=[[InlineKeyboardButton(
-                        text="👤 Открыть профиль",
-                        url=f"tg://user?id={user.id}",
-                    )]]
-                )
-            ),
         )
     except Exception:
         logging.exception("Не удалось отправить анкету администратору.")
         await callback.answer()
-        await callback.message.edit_text("⚠️ Не удалось отправить анкету. Попробуйте ещё раз.")
+        await callback.message.edit_text(
+            "⚠️ Не удалось отправить анкету. Попробуйте ещё раз."
+        )
         await state.clear()
         return
 
     await callback.answer("Анкета отправлена!")
+    await sync_form_to_google(data, user)
+
     await callback.message.edit_text(
-        "✅ <b>Анкета отправлена.</b>\n\nСпасибо за заполнение!",
+        "✅ <b>Анкета отправлена.</b>\n\n"
+        "Спасибо за заполнение!",
         parse_mode="HTML",
     )
     await offer_open_day(callback.message, state)
@@ -946,77 +1002,20 @@ async def cancel_form(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
     await callback.message.edit_text(
-        "❌ Заполнение анкеты отменено.\n\nЧтобы начать снова, нажмите /start."
+        "❌ Заполнение анкеты отменено.\n\n"
+        "Чтобы начать снова, нажмите /start."
     )
 
 
 # ============================================================
-# УПРАВЛЕНИЕ ЗАПИСЬЮ
-# ============================================================
-async def show_current_booking(message: Message, user_id: int):
-    booking = get_active_booking(user_id)
-    if not booking:
-        await message.answer("У вас нет активной записи.")
-        return
-
-    await message.answer(
-        "📅 <b>Ваша текущая запись</b>\n\n"
-        f"{esc(format_booking(booking))}\n"
-        f"📍 {esc(UNIVERSITY_ADDRESS)}",
-        parse_mode="HTML",
-        reply_markup=booking_manage_keyboard(),
-    )
-
-
-@dp.callback_query(F.data == "booking_change")
-async def booking_change(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.edit_text(
-        "📅 <b>Выберите новую дату</b>\n\nВоскресенье — выходной.",
-        parse_mode="HTML",
-        reply_markup=open_day_dates_keyboard(),
-    )
-    await state.set_state(Form.open_day_date)
-
-
-@dp.callback_query(F.data == "booking_cancel")
-async def booking_cancel(callback: CallbackQuery, state: FSMContext):
-    user_id = callback.from_user.id
-    booking = get_active_booking(user_id)
-    if not booking:
-        await callback.answer("Активной записи уже нет.", show_alert=True)
-        return
-
-    cancel_booking(user_id)
-    await callback.answer("Запись отменена.")
-    await callback.message.edit_text(
-        "❌ <b>Запись отменена.</b>\n\n"
-        "При необходимости вы можете записаться снова через бота.",
-        parse_mode="HTML",
-    )
-
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            "❌ <b>Пользователь отменил запись</b>\n\n"
-            f"👤 {esc(user_name(callback.from_user))}\n"
-            f"🆔 {callback.from_user.id}\n"
-            f"💬 {esc('@' + callback.from_user.username if callback.from_user.username else 'не указан')}\n"
-            f"📅 Было: {esc(format_booking(booking))}",
-            parse_mode="HTML",
-        )
-    except Exception:
-        logging.exception("Не удалось уведомить администратора об отмене.")
-
-
-# ============================================================
-# КАЛЕНДАРЬ И ВРЕМЯ
+# ЗАПИСЬ НА ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ
 # ============================================================
 @dp.callback_query(Form.open_day_offer, F.data == "open_start")
 async def open_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
-        "📅 <b>Выберите дату</b>\n\nВоскресенье — выходной.",
+        "📅 <b>Выберите дату</b>\n\n"
+        "Воскресенье — выходной и не предлагается.",
         parse_mode="HTML",
         reply_markup=open_day_dates_keyboard(),
     )
@@ -1032,44 +1031,47 @@ async def open_skip(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
         f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
-        "По вопросам об университете, записи или анкете можете связаться напрямую.",
+        "По вопросам можно связаться напрямую:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=f"💬 Написать {MANAGER_NAME}", url=MANAGER_URL)]]
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"💬 Написать {MANAGER_NAME}",
+                    url=MANAGER_URL,
+                )]
+            ]
         ),
     )
     await state.clear()
 
 
-@dp.callback_query(Form.open_day_date, F.data == "open_dates_back")
-async def open_dates_back(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await offer_open_day(callback.message, state)
-
-
 @dp.callback_query(Form.open_day_date, F.data.startswith("open_date:"))
 async def open_date_selected(callback: CallbackQuery, state: FSMContext):
     raw_date = callback.data.split(":", 1)[1]
+
     try:
         selected_date = datetime.fromisoformat(raw_date).date()
     except ValueError:
         await callback.answer("Некорректная дата.", show_alert=True)
         return
 
+    # Дополнительная защита от воскресенья и прошедших дат.
     today = datetime.now(MOSCOW_TZ).date()
     if selected_date < today or selected_date.weekday() == 6:
         await callback.answer("Эта дата недоступна.", show_alert=True)
         return
 
-    slots = valid_time_slots(selected_date)
-    if not slots:
-        await callback.answer("На выбранную дату больше нет доступного времени.", show_alert=True)
-        return
-
     await state.update_data(open_day_date=selected_date.isoformat())
     await callback.answer()
+
+    weekday_names_full = [
+        "понедельник", "вторник", "среда",
+        "четверг", "пятница", "суббота", "воскресенье"
+    ]
+
     await callback.message.edit_text(
-        f"🗓 <b>{WEEKDAYS[selected_date.weekday()]}, {selected_date.strftime('%d.%m.%Y')}</b>\n\n"
+        f"🗓 <b>{weekday_names_full[selected_date.weekday()]}, "
+        f"{selected_date.strftime('%d.%m.%Y')}</b>\n\n"
         "Выберите время проведения:",
         parse_mode="HTML",
         reply_markup=open_day_times_keyboard(selected_date),
@@ -1088,176 +1090,13 @@ async def open_time_back(callback: CallbackQuery, state: FSMContext):
     await state.set_state(Form.open_day_date)
 
 
-@dp.callback_query(Form.open_day_time, F.data == "no_time")
-async def no_time(callback: CallbackQuery):
-    await callback.answer("На сегодня свободного времени нет. Выберите другую дату.", show_alert=True)
-
-
 @dp.callback_query(Form.open_day_time, F.data.startswith("open_time:"))
 async def open_time_selected(callback: CallbackQuery, state: FSMContext):
     time_value = callback.data.split(":", 1)[1]
-    data = await state.get_data()
-    raw_date = data.get("open_day_date")
-    if not raw_date:
-        await callback.answer("Сначала выберите дату.", show_alert=True)
-        return
-
-    selected_date = datetime.fromisoformat(raw_date).date()
-    if time_value not in valid_time_slots(selected_date):
-        await callback.answer("Это время уже недоступно.", show_alert=True)
-        return
-
-    user = callback.from_user
-    existing = get_active_booking(user.id)
     await state.update_data(open_day_time=time_value)
-    save_booking(
-        user,
-        data.get("consent_phone") or data.get("student_phone") or "не указан",
-        raw_date,
-        time_value,
-    )
-    new_booking = get_active_booking(user.id)
-    await callback.answer("Запись сохранена!")
+    await callback.answer()
 
-    await callback.message.edit_text(
-        "✅ <b>Вы записаны!</b>\n\n"
-        f"📅 {esc(format_booking(new_booking))}\n"
-        f"📍 <b>Адрес:</b> {esc(UNIVERSITY_ADDRESS)}\n\n"
-        "Ждём вас на Дне открытых дверей.",
-        parse_mode="HTML",
-        reply_markup=booking_manage_keyboard(),
-    )
-
-    # Явный блок менеджера в конце подтверждения.
-    await callback.message.answer(
-        f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
-        f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
-        "По вопросам об университете, записи или анкете можете связаться напрямую.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=f"💬 Написать {MANAGER_NAME}", url=MANAGER_URL)]]
-        ),
-    )
-
-    # Администратору — структурированная запись.
-    try:
-        username = f"@{user.username}" if user.username else "не указан"
-        action = "🔄 Запись изменена" if existing else "🚪 Новая запись"
-        await bot.send_message(
-            ADMIN_ID,
-            f"<b>{action}</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 <b>Имя:</b> {esc(user_name(user))}\n"
-            f"💬 <b>Telegram:</b> {esc(username)}\n"
-            f"🆔 <b>Telegram ID:</b> {user.id}\n"
-            f"📱 <b>Телефон:</b> {esc(new_booking['phone'])}\n"
-            f"📅 <b>Дата:</b> {esc(format_booking(new_booking))}\n"
-            f"📍 <b>Адрес:</b> {esc(UNIVERSITY_ADDRESS)}",
-            parse_mode="HTML",
-            reply_markup=admin_booking_keyboard(user.id),
-        )
-    except Exception:
-        logging.exception("Не удалось отправить уведомление администратору о записи.")
-
-    await state.clear()
-
-
-@dp.callback_query(F.data.startswith("admin_cancel:"))
-async def admin_cancel(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("Недоступно.", show_alert=True)
-        return
-
-    try:
-        user_id = int(callback.data.split(":", 1)[1])
-    except ValueError:
-        await callback.answer("Некорректный пользователь.", show_alert=True)
-        return
-
-    booking = get_active_booking(user_id)
-    if not booking:
-        await callback.answer("Активной записи уже нет.", show_alert=True)
-        return
-
-    cancel_booking(user_id)
-    await callback.answer("Запись отменена.")
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    try:
-        await bot.send_message(
-            user_id,
-            "❌ <b>Запись на День открытых дверей отменена менеджером.</b>\n\n"
-            "Свяжитесь с Артемом, чтобы выбрать новую дату и время.",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(text="💬 Написать Артему", url=MANAGER_URL)]]
-            ),
-        )
-    except Exception:
-        logging.exception("Не удалось уведомить пользователя об отмене записи администратором.")
-
-
-# ============================================================
-# НАПОМИНАНИЯ
-# ============================================================
-async def reminder_loop():
-    while True:
-        try:
-            now = datetime.now(MOSCOW_TZ)
-            today = now.date()
-
-            with get_db() as conn:
-                bookings = conn.execute(
-                    "SELECT * FROM bookings WHERE active = 1"
-                ).fetchall()
-
-            for booking in bookings:
-                event_date = datetime.fromisoformat(booking["date"]).date()
-                event_datetime = datetime.combine(
-                    event_date,
-                    datetime.strptime(booking["time"], "%H:%M").time(),
-                    tzinfo=MOSCOW_TZ,
-                )
-
-                # Напоминание за день в 10:00.
-                if (
-                    event_date == today + timedelta(days=1)
-                    and now.hour >= 10
-                    and not booking["reminder_day_sent"]
-                ):
-                    await bot.send_message(
-                        booking["user_id"],
-                        "🔔 <b>Напоминание</b>\n\n"
-                        "Завтра вы записаны на День открытых дверей.\n"
-                        f"📅 {esc(format_booking(booking))}\n"
-                        f"📍 {esc(UNIVERSITY_ADDRESS)}",
-                        parse_mode="HTML",
-                        reply_markup=booking_manage_keyboard(),
-                    )
-                    mark_day_reminder_sent(booking["id"])
-
-                # Утреннее напоминание в день мероприятия в 08:00.
-                if (
-                    event_date == today
-                    and now.hour >= 8
-                    and not booking["reminder_morning_sent"]
-                    and now < event_datetime
-                ):
-                    await bot.send_message(
-                        booking["user_id"],
-                        "☀️ <b>Сегодня День открытых дверей!</b>\n\n"
-                        f"🕐 {esc(booking['time'])}\n"
-                        f"📍 {esc(UNIVERSITY_ADDRESS)}\n\n"
-                        "Ждём вас!",
-                        parse_mode="HTML",
-                        reply_markup=booking_manage_keyboard(),
-                    )
-                    mark_morning_reminder_sent(booking["id"])
-
-        except Exception:
-            logging.exception("Ошибка в цикле напоминаний.")
-
-        await asyncio.sleep(30)
+    await finish_open_day(callback.message, state)
 
 
 @dp.message(Command("cancel"))
@@ -1274,14 +1113,8 @@ async def main():
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(message)s",
     )
-    init_db()
-    reminder_task = asyncio.create_task(reminder_loop())
-    try:
-        print("Telegram questionnaire bot is running")
-        await dp.start_polling(bot)
-    finally:
-        reminder_task.cancel()
-        await bot.session.close()
+    print("Telegram questionnaire bot is running")
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
