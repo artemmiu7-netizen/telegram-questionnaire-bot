@@ -1038,21 +1038,44 @@ async def open_start(callback: CallbackQuery, state: FSMContext):
 async def open_skip(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
-        "Спасибо! Если захотите записаться позже, снова обратитесь к боту."
+        "Спасибо! Вы можете записаться на День открытых дверей сейчас "
+        "или вернуться к информации позже."
     )
     await callback.message.answer(
-        f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
-        f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
-        "По вопросам можно связаться напрямую:",
-        parse_mode="HTML",
+        "Что хотите сделать?",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(
-                    text=f"💬 Написать {MANAGER_NAME}",
-                    url=MANAGER_URL,
-                )]
+                [InlineKeyboardButton(text="📅 Записаться на День открытых дверей", callback_data="open_again")],
+                [InlineKeyboardButton(text="↩️ Вернуться", callback_data="open_return")],
             ]
         ),
+    )
+    await state.set_state(Form.open_day_offer)
+
+
+@dp.callback_query(Form.open_day_offer, F.data == "open_again")
+async def open_again(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        "📅 <b>Выберите дату</b>\n\n"
+        "Воскресенье — выходной и не предлагается.",
+        parse_mode="HTML",
+        reply_markup=open_day_dates_keyboard(),
+    )
+    await state.set_state(Form.open_day_date)
+
+
+@dp.callback_query(Form.open_day_offer, F.data == "open_return")
+async def open_return(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.edit_text(
+        f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
+        f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
+        "Если захотите записаться позже, можете снова обратиться к менеджеру.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"💬 Написать {MANAGER_NAME}", url=MANAGER_URL)],
+        ]),
     )
     await state.clear()
 
