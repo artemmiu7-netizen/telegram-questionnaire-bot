@@ -946,7 +946,7 @@ async def edit_school(callback: CallbackQuery, state: FSMContext):
 async def edit_class(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.delete()
-    await ask_class(callback.message, state)
+    await ask_school_type(callback.message, state)
 
 
 @dp.callback_query(Form.summary, F.data == "edit:name")
