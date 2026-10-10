@@ -582,19 +582,15 @@ async def finish_open_day(message: Message, state: FSMContext):
         )
 
         await message.answer(
-            "✅ <b>Вы записаны!</b>\n\n"
-            f"📅 {esc(appointment_text)}\n\n"
-            "Ждём вас на Дне открытых дверей.\n\n"
-            f"📍 <b>Адрес:</b> {UNIVERSITY_ADDRESS}\n\n"
-            f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
-            f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
-            "По вопросам об университете, записи или анкете "
-            "можете связаться со мной напрямую.",
+            "✅ <b>Вы записаны!</b>\n"
+            f"📅 {esc(appointment_text)}\n"
+            f"📍 {UNIVERSITY_ADDRESS}\n\n"
+            "До встречи!",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(
-                        text=f"💬 Написать {MANAGER_NAME}",
+                        text="💬 Написать Артему",
                         url=MANAGER_URL,
                     )]
                 ]
@@ -1074,7 +1070,7 @@ async def open_return(callback: CallbackQuery, state: FSMContext):
         "Если захотите записаться позже, можете снова обратиться к менеджеру.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"💬 Написать {MANAGER_NAME}", url=MANAGER_URL)],
+            [InlineKeyboardButton(text="💬 Написать Артему", url=MANAGER_URL)],
         ]),
     )
     await state.clear()
