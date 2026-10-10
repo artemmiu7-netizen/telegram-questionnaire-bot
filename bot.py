@@ -283,19 +283,23 @@ def careers_keyboard(selected=None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def summary_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🏫 Изменить учебное заведение", callback_data="edit:school")],
-            [InlineKeyboardButton(text="🎓 Изменить вариант обучения", callback_data="edit:class")],
-            [InlineKeyboardButton(text="👤 Изменить ФИО", callback_data="edit:name")],
-            [InlineKeyboardButton(text="📱 Изменить телефон", callback_data="edit:phones")],
-            [InlineKeyboardButton(text="📝 Изменить ЕГЭ", callback_data="edit:exams")],
-            [InlineKeyboardButton(text="💼 Изменить карьеру", callback_data="edit:career")],
-            [InlineKeyboardButton(text="✅ Отправить анкету", callback_data="submit_form")],
-            [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_form")],
-        ]
-    )
+def summary_keyboard(data=None) -> InlineKeyboardMarkup:
+    data = data or {}
+    rows = [
+        [InlineKeyboardButton(text="🏫 Изменить учебное заведение", callback_data="edit:school")],
+        [InlineKeyboardButton(text="🎓 Изменить вариант обучения", callback_data="edit:class")],
+        [InlineKeyboardButton(text="👤 Изменить ФИО", callback_data="edit:name")],
+        [InlineKeyboardButton(text="📱 Изменить телефон", callback_data="edit:phones")],
+    ]
+    if data.get("class_number") != "Колледж":
+        rows.append([InlineKeyboardButton(text="📝 Изменить ЕГЭ", callback_data="edit:exams")])
+    rows.extend([
+        [InlineKeyboardButton(text="💼 Изменить карьеру", callback_data="edit:career")],
+        [InlineKeyboardButton(text="✅ Отправить анкету", callback_data="submit_form")],
+        [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_form")],
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 
 async def ask_school(message: Message, state: FSMContext):
@@ -393,7 +397,7 @@ async def show_summary(message: Message, state: FSMContext):
         f"📝 <b>ЕГЭ:</b>\n{exams}\n\n"
         f"💼 <b>Карьера:</b>\n{careers}\n",
         parse_mode="HTML",
-        reply_markup=summary_keyboard(),
+        reply_markup=summary_keyboard(data),
     )
     await state.set_state(Form.summary)
 
