@@ -227,8 +227,8 @@ def class_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="11 класс", callback_data="class:11"),
-                InlineKeyboardButton(text="Колледж", callback_data="class:college"),
+                InlineKeyboardButton(text="🏫 Школа", callback_data="class:11"),
+                InlineKeyboardButton(text="🎓 Колледж", callback_data="class:college"),
             ],
             [InlineKeyboardButton(
                 text="⬅️ Назад",
@@ -295,29 +295,31 @@ def summary_keyboard(data=None) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="📝 Изменить ЕГЭ", callback_data="edit:exams")])
     rows.extend([
         [InlineKeyboardButton(text="💼 Изменить карьеру", callback_data="edit:career")],
-        [InlineKeyboardButton(text="✅ Отправить анкету", callback_data="submit_form")],
-        [InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_form")],
+        [InlineKeyboardButton(text="✅ Поделиться анкетой", callback_data="submit_form")],
     ])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 
-async def ask_school(message: Message, state: FSMContext):
+async def ask_school_type(message: Message, state: FSMContext):
     await message.answer(
-        "🏫 <b>Учебное заведение</b>\n\nВведите название школы или колледжа:",
-        parse_mode="HTML",
-        reply_markup=back_keyboard(),
-    )
-    await state.set_state(Form.school)
-
-
-async def ask_class(message: Message, state: FSMContext):
-    await message.answer(
-        "🎓 <b>Формат обучения</b>\n\nВыберите вариант:",
+        "🎓 <b>Где вы учитесь?</b>\n\nВыберите школу или колледж:",
         parse_mode="HTML",
         reply_markup=class_keyboard(),
     )
     await state.set_state(Form.class_number)
+
+
+async def ask_school(message: Message, state: FSMContext):
+    data = await state.get_data()
+    school_type = data.get("class_number", "Школа")
+    label = "школы" if school_type == "Школа" else "колледжа"
+    await message.answer(
+        f"🏫 <b>Название учебного заведения</b>\n\nВведите название {label}:",
+        parse_mode="HTML",
+        reply_markup=back_keyboard(),
+    )
+    await state.set_state(Form.school)
 
 
 async def ask_surname(message: Message, state: FSMContext):
@@ -620,7 +622,14 @@ async def start(message: Message, state: FSMContext):
         "подобрать для вас полезную информацию об университете.\n\n"
         "Перед началом необходимо ваше согласие на обработку персональных данных."
     )
-    await message.answer(opening_text, parse_mode="HTML")
+    try:
+        await message.answer_photo(
+            FSInputFile(SITE_PHOTO),
+            caption=opening_text,
+            parse_mode="HTML",
+        )
+    except (FileNotFoundError, OSError):
+        await message.answer(opening_text, parse_mode="HTML")
 
     await message.answer(
         f"<b>{esc(CONSENT_TEXT)}</b>",
@@ -718,17 +727,17 @@ async def school(message: Message, state: FSMContext):
         await start(message, state)
         return
     await state.update_data(school=message.text.strip())
-    await ask_class(message, state)
+    await ask_surname(message, state)
 
 
 @dp.callback_query(Form.class_number, F.data.startswith("class:"))
 async def class_selected(callback: CallbackQuery, state: FSMContext):
     value = callback.data.split(":", 1)[1]
-    display_value = "Колледж" if value == "college" else "11 класс"
+    display_value = "Колледж" if value == "college" else "Школа"
     await state.update_data(class_number=display_value, exams=[])
     await callback.answer()
-    await callback.message.edit_text(f"Вариант обучения: {esc(display_value)}")
-    await ask_surname(callback.message, state)
+    await callback.message.edit_text(f"Вы выбрали: {esc(display_value)}")
+    await ask_school(callback.message, state)
 
 
 @dp.callback_query(Form.class_number, F.data == "back")
@@ -741,7 +750,7 @@ async def class_back(callback: CallbackQuery, state: FSMContext):
 @dp.message(Form.surname)
 async def surname(message: Message, state: FSMContext):
     if message.text == "⬅️ Назад":
-        await ask_school(message, state)
+        await ask_school_type(message, state)
         return
     await state.update_data(surname=message.text.strip())
     await ask_name(message, state)
