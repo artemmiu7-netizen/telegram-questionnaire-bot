@@ -862,7 +862,16 @@ async def other_career(message: Message, state: FSMContext):
     selected = [x for x in data.get("career", []) if not x.startswith("Другое:")]
     selected.append(f"Другое: {message.text.strip()}")
     await state.update_data(career=selected)
-    await show_summary(message, state)
+    data = await state.get_data()
+    if data.get("class_number") == "Колледж":
+        await message.answer(
+            "🏷 <b>Код специальности</b>\\n\\nВведите код специальности колледжа:",
+            parse_mode="HTML",
+            reply_markup=back_keyboard(),
+        )
+        await state.set_state(Form.specialty_code)
+    else:
+        await show_summary(message, state)
 
 
 @dp.callback_query(Form.career, F.data == "career_done")
