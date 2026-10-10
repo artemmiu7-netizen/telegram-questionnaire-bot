@@ -81,6 +81,7 @@ class Form(StatesGroup):
     contact = State()
     school = State()
     class_number = State()
+    specialty_code = State()
     surname = State()
     name = State()
     patronymic = State()
@@ -161,6 +162,7 @@ async def sync_form_to_google(data: dict, user):
             "consent_phone": data.get("consent_phone", ""),
             "school": data.get("school", ""),
             "class_number": data.get("class_number", ""),
+            "specialty_code": data.get("specialty_code", ""),
             "surname": data.get("surname", ""),
             "name": data.get("name", ""),
             "patronymic": data.get("patronymic", ""),
@@ -192,10 +194,6 @@ def start_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(
                 text="✅ Дать согласие",
                 callback_data="consent_yes",
-            )],
-            [InlineKeyboardButton(
-                text="❌ Не согласен(на)",
-                callback_data="consent_no",
             )],
         ]
     )
@@ -229,9 +227,8 @@ def class_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="9", callback_data="class:9"),
-                InlineKeyboardButton(text="10", callback_data="class:10"),
-                InlineKeyboardButton(text="11", callback_data="class:11"),
+                InlineKeyboardButton(text="11 класс", callback_data="class:11"),
+                InlineKeyboardButton(text="Колледж", callback_data="class:college"),
             ],
             [InlineKeyboardButton(
                 text="⬅️ Назад",
@@ -289,8 +286,8 @@ def careers_keyboard(selected=None) -> InlineKeyboardMarkup:
 def summary_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🏫 Изменить школу", callback_data="edit:school")],
-            [InlineKeyboardButton(text="🎓 Изменить класс", callback_data="edit:class")],
+            [InlineKeyboardButton(text="🏫 Изменить учебное заведение", callback_data="edit:school")],
+            [InlineKeyboardButton(text="🎓 Изменить вариант обучения", callback_data="edit:class")],
             [InlineKeyboardButton(text="👤 Изменить ФИО", callback_data="edit:name")],
             [InlineKeyboardButton(text="📱 Изменить телефон", callback_data="edit:phones")],
             [InlineKeyboardButton(text="📝 Изменить ЕГЭ", callback_data="edit:exams")],
@@ -303,7 +300,7 @@ def summary_keyboard() -> InlineKeyboardMarkup:
 
 async def ask_school(message: Message, state: FSMContext):
     await message.answer(
-        "🏫 <b>Школа</b>\n\nВведите название школы:",
+        "🏫 <b>Учебное заведение</b>\n\nВведите название школы или колледжа:",
         parse_mode="HTML",
         reply_markup=back_keyboard(),
     )
@@ -312,7 +309,7 @@ async def ask_school(message: Message, state: FSMContext):
 
 async def ask_class(message: Message, state: FSMContext):
     await message.answer(
-        "🎓 <b>Класс</b>\n\nВыберите класс:",
+        "🎓 <b>Формат обучения</b>\n\nВыберите вариант:",
         parse_mode="HTML",
         reply_markup=class_keyboard(),
     )
@@ -386,8 +383,9 @@ async def show_summary(message: Message, state: FSMContext):
     await message.answer(
         "📋 <b>Проверьте анкету</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🏫 <b>Школа:</b> {esc(data.get('school'))}\n"
-        f"🎓 <b>Класс:</b> {esc(data.get('class_number'))}\n\n"
+        f"🏫 <b>Учебное заведение:</b> {esc(data.get('school'))}\n"
+        f"🎓 <b>Вариант обучения:</b> {esc(data.get('class_number'))}\n"
+        f"🏷 <b>Код специальности:</b> {esc(data.get('specialty_code') or 'не требуется')}\n\n"
         f"👤 <b>Фамилия:</b> {esc(data.get('surname'))}\n"
         f"👤 <b>Имя:</b> {esc(data.get('name'))}\n"
         f"👤 <b>Отчество:</b> {esc(data.get('patronymic'))}\n\n"
@@ -417,8 +415,9 @@ def build_admin_message(data, user, consent_phone: str) -> str:
         "🔐 <b>Согласие:</b> Да\n"
         f"📅 <b>Время:</b> {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
         "📋 <b>Анкета:</b>\n"
-        f"🏫 {esc(data.get('school'))}\n"
-        f"🎓 {esc(data.get('class_number'))}\n"
+        f"🏫 Учебное заведение: {esc(data.get('school'))}\n"
+        f"🎓 Вариант обучения: {esc(data.get('class_number'))}\n"
+        f"🏷 Код специальности: {esc(data.get('specialty_code') or 'не требуется')}\n"
         f"👤 {esc(data.get('surname'))} {esc(data.get('name'))} {esc(data.get('patronymic'))}\n"
         f"📱 {esc(data.get('student_phone'))}\n"
         f"📝 {exams}\n"
@@ -613,19 +612,11 @@ async def start(message: Message, state: FSMContext):
 
     opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
-        "Пройдите короткий опросник до конца, чтобы мы могли "
+        "Пройдите короткий опросник ММУ, чтобы мы могли "
         "подобрать для вас полезную информацию об университете.\n\n"
         "Перед началом необходимо ваше согласие на обработку персональных данных."
     )
-
-    try:
-        await message.answer_photo(
-            FSInputFile(SITE_PHOTO),
-            caption=opening_text,
-            parse_mode="HTML",
-        )
-    except (FileNotFoundError, OSError):
-        await message.answer(opening_text, parse_mode="HTML")
+    await message.answer(opening_text, parse_mode="HTML")
 
     await message.answer(
         f"<b>{esc(CONSENT_TEXT)}</b>",
@@ -640,26 +631,18 @@ async def consent_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
     await callback.message.edit_text(
         "✅ <b>Согласие получено.</b>\n\n"
-        "Теперь поделитесь вашим номером Telegram.\n"
-        "Нажмите кнопку ниже.",
+        "Московский международный университет — официальный сайт:",
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🌐 Открыть сайт ММУ", url=UNIVERSITY_URL)
+        ]]),
     )
     await callback.message.answer(
-        "📱 <b>Поделиться номером Telegram</b>",
+        "📱 <b>Теперь поделитесь номером Telegram</b> кнопкой ниже.",
         parse_mode="HTML",
         reply_markup=phone_share_keyboard(),
     )
     await state.set_state(Form.contact)
-
-
-@dp.callback_query(Form.consent, F.data == "consent_no")
-async def consent_no(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await callback.answer()
-    await callback.message.edit_text(
-        "❌ Без согласия обработка данных невозможна.\n\n"
-        "Чтобы начать заново, нажмите /start."
-    )
 
 
 # ============================================================
@@ -704,36 +687,12 @@ async def save_contact(message: Message, state: FSMContext):
         )
         return
 
-    # После согласия и передачи контакта отправляем фото и сайт университета.
+    # Сайт уже показан сразу после согласия; продолжаем анкету без повторного фото/ссылки.
     await message.answer(
-        "🎓 <b>Спасибо!</b>\n\n"
-        "Познакомьтесь с Московским международным университетом.",
+        "🎓 <b>Спасибо!</b> Теперь заполним короткую анкету.",
         parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
     )
-
-    try:
-        await message.answer_photo(
-            FSInputFile(SITE_PHOTO),
-                caption="🌐 <b>Московский международный университет</b>",
-                parse_mode="HTML",
-            )
-    except FileNotFoundError:
-        pass
-
-    await message.answer(
-        "🌐 <b>Официальный сайт:</b>",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(
-                text="🏫 Открыть сайт ММУ",
-                url=UNIVERSITY_URL,
-            )]]
-        ),
-    )
-
-    # После этого продолжаем анкету.
-    await message.answer("Теперь можно заполнить анкету.")
     await ask_school(message, state)
 
 
@@ -761,9 +720,10 @@ async def school(message: Message, state: FSMContext):
 @dp.callback_query(Form.class_number, F.data.startswith("class:"))
 async def class_selected(callback: CallbackQuery, state: FSMContext):
     value = callback.data.split(":", 1)[1]
-    await state.update_data(class_number=value)
+    display_value = "Колледж" if value == "college" else "11 класс"
+    await state.update_data(class_number=display_value, exams=[])
     await callback.answer()
-    await callback.message.edit_text(f"Класс: {esc(value)}")
+    await callback.message.edit_text(f"Вариант обучения: {esc(display_value)}")
     await ask_surname(callback.message, state)
 
 
@@ -804,7 +764,11 @@ async def patronymic(message: Message, state: FSMContext):
 @dp.message(Form.student_phone, F.contact)
 async def student_phone_contact(message: Message, state: FSMContext):
     await state.update_data(student_phone=message.contact.phone_number)
-    await ask_exams(message, state)
+    data = await state.get_data()
+    if data.get("class_number") == "Колледж":
+        await ask_career(message, state)
+    else:
+        await ask_exams(message, state)
 
 
 @dp.message(Form.student_phone)
@@ -813,7 +777,11 @@ async def student_phone_text(message: Message, state: FSMContext):
         await ask_patronymic(message, state)
         return
     await state.update_data(student_phone=message.text.strip())
-    await ask_exams(message, state)
+    data = await state.get_data()
+    if data.get("class_number") == "Колледж":
+        await ask_career(message, state)
+    else:
+        await ask_exams(message, state)
 
 
 @dp.callback_query(Form.exams, F.data.startswith("exam:"))
@@ -910,7 +878,29 @@ async def career_done(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer()
     await callback.message.edit_text("✅ Карьерная сфера сохранена.")
-    await show_summary(callback.message, state)
+    data = await state.get_data()
+    if data.get("class_number") == "Колледж":
+        await callback.message.answer(
+            "🏷 <b>Код специальности</b>\n\nВведите код специальности колледжа:",
+            parse_mode="HTML",
+            reply_markup=back_keyboard(),
+        )
+        await state.set_state(Form.specialty_code)
+    else:
+        await show_summary(callback.message, state)
+
+
+@dp.message(Form.specialty_code)
+async def specialty_code(message: Message, state: FSMContext):
+    if message.text == "⬅️ Назад":
+        await ask_career(message, state)
+        return
+    value = (message.text or "").strip()
+    if not value:
+        await message.answer("Введите код специальности текстом.")
+        return
+    await state.update_data(specialty_code=value)
+    await show_summary(message, state)
 
 
 @dp.callback_query(Form.career, F.data == "back")
