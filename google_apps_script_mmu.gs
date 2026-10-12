@@ -1,5 +1,5 @@
 const SHEET_ID = '1iRx4N31fSFjg3RE77O4GFdeOHkIjEzWJ6efVvwUqBxs';
-const SECRET = 'PASTE_YOUR_SECRET_HERE';
+const SECRET = 'Artemmiu77';
 
 const HEADERS = [
   'Дата обновления',
