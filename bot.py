@@ -126,6 +126,13 @@ def _send_to_google_sheet(payload: dict) -> bool:
         with urllib.request.urlopen(request, timeout=15) as response:
             result = response.read().decode("utf-8", errors="replace")
         logging.info("Google Sheets response: %s", result)
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict) and parsed.get("ok") is False:
+                logging.error("Google Apps Script отклонил запрос: %s", parsed.get("error", result))
+                return False
+        except (json.JSONDecodeError, TypeError):
+            pass
         return True
     except (urllib.error.URLError, TimeoutError) as exc:
         logging.exception("Не удалось передать данные в Google Sheets: %s", exc)
@@ -181,8 +188,9 @@ async def sync_booking_to_google(user, data: dict, status="Записан"):
             "action": "booking",
             "telegram_id": user.id,
             "username": f"@{user.username}" if user.username else "",
-            "booking_date": data.get("open_day_date", ""),
-            "booking_time": data.get("open_day_time", ""),
+            # Эти названия полей ожидает Google Apps Script.
+            "open_day_date": data.get("open_day_date", ""),
+            "open_day_time": data.get("open_day_time", ""),
             "booking_status": status,
         },
     )
