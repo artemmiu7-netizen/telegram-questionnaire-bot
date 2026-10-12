@@ -225,17 +225,6 @@ def phone_share_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def phone_skip_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(
-                text="Продолжить без номера",
-                callback_data="contact_skip",
-            )]
-        ]
-    )
-
-
 def back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -313,7 +302,6 @@ def summary_keyboard(data=None) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🏫 Изменить учебное заведение", callback_data="edit:school")],
         [InlineKeyboardButton(text="🎓 Изменить вариант обучения", callback_data="edit:class")],
         [InlineKeyboardButton(text="👤 Изменить ФИО", callback_data="edit:name")],
-        [InlineKeyboardButton(text="📱 Изменить телефон", callback_data="edit:phones")],
     ]
     if data.get("class_number") != "Колледж":
         rows.append([InlineKeyboardButton(text="📝 Изменить ЕГЭ", callback_data="edit:exams")])
@@ -374,13 +362,13 @@ async def ask_patronymic(message: Message, state: FSMContext):
 
 
 async def ask_student_phone(message: Message, state: FSMContext):
-    await message.answer(
-        "📱 <b>Телефон ученика</b>\n\n"
-        "Поделитесь номером кнопкой ниже или введите его вручную.",
-        parse_mode="HTML",
-        reply_markup=phone_share_keyboard(),
-    )
-    await state.set_state(Form.student_phone)
+    # Используем уже подтверждённый контакт Telegram, не просим номер повторно.
+    data = await state.get_data()
+    await state.update_data(student_phone=data.get("consent_phone", ""))
+    if data.get("class_number") == "Колледж":
+        await ask_career(message, state)
+    else:
+        await ask_exams(message, state)
 
 
 async def ask_exams(message: Message, state: FSMContext):
@@ -724,15 +712,11 @@ async def consent_yes(callback: CallbackQuery, state: FSMContext):
         ]]),
     )
     await callback.message.answer(
-        "📱 <b>Хотите оставить номер для связи?</b>\n\n"
-        "Нажмите кнопку ниже, чтобы отправить свой номер Telegram. "
-        "Это добровольно — можно продолжить и без него.",
+        "📱 <b>Поделитесь своим номером телефона</b>\n\n"
+        "Чтобы продолжить анкету, нажмите кнопку «Поделиться номером Telegram». "
+        "Ручной ввод и пропуск номера недоступны.",
         parse_mode="HTML",
         reply_markup=phone_share_keyboard(),
-    )
-    await callback.message.answer(
-        "Если не хотите указывать номер, продолжите анкету без него.",
-        reply_markup=phone_skip_keyboard(),
     )
     await state.set_state(Form.contact)
 
@@ -793,27 +777,10 @@ async def save_contact(message: Message, state: FSMContext):
     await ask_school_type(message, state)
 
 
-@dp.callback_query(Form.contact, F.data == "contact_skip")
-async def skip_contact(callback: CallbackQuery, state: FSMContext):
-    await callback.answer("Продолжаем без номера")
-    await state.update_data(consent_phone="")
-    await callback.message.edit_text(
-        "Ок, продолжим без номера телефона.\n\n"
-        "При желании вы сможете оставить контакт менеджеру позже."
-    )
-    await callback.message.answer(
-        "🎓 <b>Спасибо!</b> Теперь заполним короткую анкету.",
-        parse_mode="HTML",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    await ask_school_type(callback.message, state)
-
-
 @dp.message(Form.contact)
 async def contact_not_shared(message: Message, state: FSMContext):
     await message.answer(
-        "Нажмите «📱 Поделиться номером Telegram» или выберите "
-        "«Продолжить без номера».",
+        "Чтобы продолжить, нажмите «📱 Поделиться номером Telegram» и отправьте свой контакт.",
         reply_markup=phone_share_keyboard(),
     )
 
@@ -873,29 +840,6 @@ async def patronymic(message: Message, state: FSMContext):
         return
     await state.update_data(patronymic=message.text.strip())
     await ask_student_phone(message, state)
-
-
-@dp.message(Form.student_phone, F.contact)
-async def student_phone_contact(message: Message, state: FSMContext):
-    await state.update_data(student_phone=message.contact.phone_number)
-    data = await state.get_data()
-    if data.get("class_number") == "Колледж":
-        await ask_career(message, state)
-    else:
-        await ask_exams(message, state)
-
-
-@dp.message(Form.student_phone)
-async def student_phone_text(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await ask_patronymic(message, state)
-        return
-    await state.update_data(student_phone=message.text.strip())
-    data = await state.get_data()
-    if data.get("class_number") == "Колледж":
-        await ask_career(message, state)
-    else:
-        await ask_exams(message, state)
 
 
 @dp.callback_query(Form.exams, F.data.startswith("exam:"))
