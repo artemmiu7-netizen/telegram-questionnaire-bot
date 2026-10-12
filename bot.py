@@ -612,6 +612,24 @@ async def start(message: Message, state: FSMContext):
     await state.clear()
     await state.update_data(consent_phone=None)
 
+    # Сразу уведомляем администратора о запуске бота.
+    # Номер телефона без отдельной отправки контакта не доступен.
+    user = message.from_user
+    try:
+        await bot.send_message(
+            ADMIN_ID,
+            (
+                "🟢 <b>Пользователь нажал /start</b>\n\n"
+                f"👤 Имя: {esc(user.first_name or '')} {esc(user.last_name or '')}\n"
+                f"💬 Telegram: {esc('@' + user.username if user.username else 'не указан')}\n"
+                f"🆔 Telegram ID: {user.id}\n"
+                "📱 Телефон: пока не предоставлен"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception:
+        logging.exception("Не удалось отправить уведомление о /start администратору.")
+
     opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
         "Пройдите короткий опросник ММУ, чтобы мы могли "
