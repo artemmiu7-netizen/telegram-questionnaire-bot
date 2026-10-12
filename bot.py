@@ -614,12 +614,34 @@ async def finish_open_day(message: Message, state: FSMContext):
                 "Запись на ДОД для Telegram ID %s не подтверждена Google Sheets.",
                 user.id,
             )
+            try:
+                await bot.send_message(
+                    ADMIN_ID,
+                    "⚠️ <b>ПРОВЕРЬ ЗАПИСЬ НА ДОД ВРУЧНУЮ</b>\n\n"
+                    f"Telegram ID: {user.id}\n"
+                    f"Дата и время: {esc(appointment_text)}\n"
+                    "Google Sheets не подтвердил сохранение.",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                logging.exception("Не удалось отправить предупреждение об ошибке записи.")
+
+            user_message = (
+                "⚠️ <b>Почти готово!</b>\n"
+                f"📅 Вы выбрали: {esc(appointment_text)}\n"
+                "Не получилось автоматически подтвердить запись в таблице. "
+                "Пожалуйста, напишите менеджеру, чтобы мы закрепили время."
+            )
+        else:
+            user_message = (
+                "✅ <b>Вы записаны!</b>\n"
+                f"📅 {esc(appointment_text)}\n"
+                f"📍 {UNIVERSITY_ADDRESS}\n\n"
+                "До встречи!"
+            )
 
         await message.answer(
-            "✅ <b>Вы записаны!</b>\n"
-            f"📅 {esc(appointment_text)}\n"
-            f"📍 {UNIVERSITY_ADDRESS}\n\n"
-            "До встречи!",
+            user_message,
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -748,6 +770,7 @@ async def save_contact(message: Message, state: FSMContext):
                 f"💬 Telegram: {esc('@' + user.username if user.username else 'не указан')}\n"
                 f"🆔 Telegram ID: {user.id}\n"
                 f"📱 Номер: {esc(phone)}\n"
+                f"📍 Источник: {esc(source)}\n"
                 "🔐 Согласие: Да"
             ),
             parse_mode="HTML",
