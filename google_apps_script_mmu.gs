@@ -1,5 +1,5 @@
 const SHEET_ID = '1iRx4N31fSFjg3RE77O4GFdeOHkIjEzWJ6efVvwUqBxs';
-const SECRET = 'Artemmiu77';
+const SECRET = 'PASTE_NEW_RANDOM_SECRET_HERE';
 
 const HEADERS = [
   'Дата обновления',
@@ -40,10 +40,11 @@ const LEAD_STATUSES = [
 
 function getMainSheet_() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const sheet = ss.getSheets()[0];
+  let sheet = ss.getSheetByName('Заявки');
 
-  if (sheet.getName() !== 'Заявки') {
-    sheet.setName('Заявки');
+  // Используем существующий лист, не пытаясь переименовать другой лист.
+  if (!sheet) {
+    sheet = ss.insertSheet('Заявки');
   }
 
   ensureHeaders_(sheet);
