@@ -401,7 +401,12 @@ function updateMainRowFromPayload_(sheet, row, body) {
   if (body.booking_time !== undefined) values[16] = body.booking_time;
   if (body.booking_status !== undefined) {
     values[17] = body.booking_status;
-    if (!values[18] && body.booking_status) {
+    if (body.booking_status === 'Пришел на ДОД') {
+      values[18] = 'Пришел на ДОД';
+    } else if (
+      body.booking_status === 'Записан на ДОД' &&
+      ['','Новая','В работе','Связались','Не дозвонились'].includes(String(values[18] || ''))
+    ) {
       values[18] = 'Записан на ДОД';
     }
   }
