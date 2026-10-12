@@ -181,14 +181,16 @@ async def sync_form_to_google(data: dict, user):
     )
 
 
-async def sync_booking_to_google(user, data: dict, status="Записан"):
-    await asyncio.to_thread(
+async def sync_booking_to_google(user, data: dict, status="Записан на ДОД"):
+    # Отправляем оба набора ключей для совместимости с версиями Apps Script.
+    return await asyncio.to_thread(
         _send_to_google_sheet,
         {
             "action": "booking",
             "telegram_id": user.id,
             "username": f"@{user.username}" if user.username else "",
-            # Эти названия полей ожидает Google Apps Script.
+            "booking_date": data.get("open_day_date", ""),
+            "booking_time": data.get("open_day_time", ""),
             "open_day_date": data.get("open_day_date", ""),
             "open_day_time": data.get("open_day_time", ""),
             "booking_status": status,
@@ -582,23 +584,31 @@ async def finish_open_day(message: Message, state: FSMContext):
             x for x in [user.first_name, user.last_name] if x
         ) or "не указано"
 
-        await bot.send_message(
-            ADMIN_ID,
-            "🚪 <b>ЗАПИСЬ НА ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ</b>\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            f"👤 <b>Имя:</b> {esc(full_name)}\n"
-            f"💬 <b>Telegram:</b> {esc(username)}\n"
-            f"🆔 <b>Telegram ID:</b> {user.id}\n"
-            f"📱 <b>Телефон:</b> {esc(data.get('consent_phone'))}\n"
-            f"📅 <b>Дата и время:</b> {esc(appointment_text)}",
-            parse_mode="HTML",
-        )
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                "🚪 <b>ЗАПИСЬ НА ДЕНЬ ОТКРЫТЫХ ДВЕРЕЙ</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                f"👤 <b>Имя:</b> {esc(full_name)}\n"
+                f"💬 <b>Telegram:</b> {esc(username)}\n"
+                f"🆔 <b>Telegram ID:</b> {user.id}\n"
+                f"📱 <b>Телефон:</b> {esc(data.get('consent_phone') or 'не предоставлен')}\n"
+                f"📅 <b>Дата и время:</b> {esc(appointment_text)}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            logging.exception("Не удалось отправить уведомление о записи на ДОД.")
 
-        await sync_booking_to_google(
+        sheet_saved = await sync_booking_to_google(
             user,
             {"open_day_date": open_date, "open_day_time": open_time},
-            status="Записан",
+            status="Записан на ДОД",
         )
+        if not sheet_saved:
+            logging.error(
+                "Запись на ДОД для Telegram ID %s не подтверждена Google Sheets.",
+                user.id,
+            )
 
         await message.answer(
             "✅ <b>Вы записаны!</b>\n"
