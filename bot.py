@@ -606,7 +606,7 @@ async def finish_open_day(message: Message, state: FSMContext):
 
         sheet_saved = await sync_booking_to_google(
             user,
-            {"open_day_date": open_date, "open_day_time": open_time},
+            data,
             status="Записан на ДОД",
         )
         if not sheet_saved:
