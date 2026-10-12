@@ -220,6 +220,17 @@ def phone_share_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def phone_skip_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Продолжить без номера",
+                callback_data="contact_skip",
+            )]
+        ]
+    )
+
+
 def back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -673,9 +684,15 @@ async def consent_yes(callback: CallbackQuery, state: FSMContext):
         ]]),
     )
     await callback.message.answer(
-        "📱 <b>Теперь поделитесь номером Telegram</b> кнопкой ниже.",
+        "📱 <b>Хотите оставить номер для связи?</b>\n\n"
+        "Нажмите кнопку ниже, чтобы отправить свой номер Telegram. "
+        "Это добровольно — можно продолжить и без него.",
         parse_mode="HTML",
         reply_markup=phone_share_keyboard(),
+    )
+    await callback.message.answer(
+        "Если не хотите указывать номер, продолжите анкету без него.",
+        reply_markup=phone_skip_keyboard(),
     )
     await state.set_state(Form.contact)
 
@@ -728,13 +745,30 @@ async def save_contact(message: Message, state: FSMContext):
         parse_mode="HTML",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await ask_school(message, state)
+    await ask_school_type(message, state)
+
+
+@dp.callback_query(Form.contact, F.data == "contact_skip")
+async def skip_contact(callback: CallbackQuery, state: FSMContext):
+    await callback.answer("Продолжаем без номера")
+    await state.update_data(consent_phone="")
+    await callback.message.edit_text(
+        "Ок, продолжим без номера телефона.\n\n"
+        "При желании вы сможете оставить контакт менеджеру позже."
+    )
+    await callback.message.answer(
+        "🎓 <b>Спасибо!</b> Теперь заполним короткую анкету.",
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await ask_school_type(callback.message, state)
 
 
 @dp.message(Form.contact)
 async def contact_not_shared(message: Message, state: FSMContext):
     await message.answer(
-        "Чтобы продолжить, нажмите кнопку «📱 Поделиться номером Telegram».",
+        "Нажмите «📱 Поделиться номером Telegram» или выберите "
+        "«Продолжить без номера».",
         reply_markup=phone_share_keyboard(),
     )
 
