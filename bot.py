@@ -142,8 +142,8 @@ def _send_to_google_sheet(payload: dict) -> bool:
         return False
 
 
-async def sync_contact_to_google(user, phone: str):
-    await asyncio.to_thread(
+async def sync_contact_to_google(user, phone: str, source: str = ""):
+    return await asyncio.to_thread(
         _send_to_google_sheet,
         {
             "action": "contact",
@@ -153,6 +153,7 @@ async def sync_contact_to_google(user, phone: str):
             "last_name": user.last_name or "",
             "phone": phone,
             "consent": "Да",
+            "source": source,
         },
     )
 
@@ -167,6 +168,7 @@ async def sync_form_to_google(data: dict, user):
             "first_name": user.first_name or "",
             "last_name": user.last_name or "",
             "consent_phone": data.get("consent_phone", ""),
+            "source": data.get("source", "Не указан"),
             "school": data.get("school", ""),
             "class_number": data.get("class_number", ""),
             "specialty_code": data.get("specialty_code", ""),
@@ -194,6 +196,7 @@ async def sync_booking_to_google(user, data: dict, status="Записан на �
             "open_day_date": data.get("open_day_date", ""),
             "open_day_time": data.get("open_day_time", ""),
             "booking_status": status,
+            "source": data.get("source", "Не указан"),
         },
     )
 
@@ -439,6 +442,7 @@ def build_admin_message(data, user, consent_phone: str) -> str:
         f"💬 <b>Telegram:</b> {esc(username)}\n"
         f"🆔 <b>Telegram ID:</b> {user.id}\n"
         f"📱 <b>Телефон Telegram:</b> {esc(consent_phone)}\n"
+        f"📍 <b>Источник:</b> {esc(data.get('source') or 'Не указан')}\n"
         "🔐 <b>Согласие:</b> Да\n"
         f"📅 <b>Время:</b> {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n\n"
         "📋 <b>Анкета:</b>\n"
@@ -593,7 +597,8 @@ async def finish_open_day(message: Message, state: FSMContext):
                 f"💬 <b>Telegram:</b> {esc(username)}\n"
                 f"🆔 <b>Telegram ID:</b> {user.id}\n"
                 f"📱 <b>Телефон:</b> {esc(data.get('consent_phone') or 'не предоставлен')}\n"
-                f"📅 <b>Дата и время:</b> {esc(appointment_text)}",
+                f"📅 <b>Дата и время:</b> {esc(appointment_text)}\n"
+                f"📍 <b>Источник:</b> {esc(data.get('source') or 'Не указан')}",
                 parse_mode="HTML",
             )
         except Exception:
@@ -639,7 +644,9 @@ async def finish_open_day(message: Message, state: FSMContext):
 @dp.message(CommandStart())
 async def start(message: Message, state: FSMContext):
     await state.clear()
-    await state.update_data(consent_phone=None)
+    parts = (message.text or "").split(maxsplit=1)
+    source = parts[1].strip() if len(parts) > 1 else "Не указан"
+    await state.update_data(consent_phone=None, source=source)
 
     # Сразу уведомляем администратора о запуске бота.
     # Номер телефона без отдельной отправки контакта не доступен.
@@ -652,6 +659,7 @@ async def start(message: Message, state: FSMContext):
                 f"👤 Имя: {esc(user.first_name or '')} {esc(user.last_name or '')}\n"
                 f"💬 Telegram: {esc('@' + user.username if user.username else 'не указан')}\n"
                 f"🆔 Telegram ID: {user.id}\n"
+                f"📍 Источник: {esc(source)}\n"
                 "📱 Телефон: пока не предоставлен"
             ),
             parse_mode="HTML",
@@ -724,8 +732,12 @@ async def save_contact(message: Message, state: FSMContext):
         return
 
     phone = contact.phone_number
+    current_data = await state.get_data()
+    source = current_data.get("source", "Не указан")
     await state.update_data(consent_phone=phone)
-    await sync_contact_to_google(user, phone)
+    sheet_saved = await sync_contact_to_google(user, phone, source)
+    if not sheet_saved:
+        logging.error("Контакт Telegram ID %s не подтверждён Google Sheets.", user.id)
 
     try:
         await bot.send_message(
