@@ -142,7 +142,9 @@ def _send_to_google_sheet(payload: dict) -> bool:
         return False
 
 
-async def sync_contact_to_google(user, phone: str, source: str = ""):
+async def sync_contact_to_google(
+    user, phone: str, source: str = "", uz_code: str = ""
+):
     return await asyncio.to_thread(
         _send_to_google_sheet,
         {
@@ -154,6 +156,7 @@ async def sync_contact_to_google(user, phone: str, source: str = ""):
             "phone": phone,
             "consent": "Да",
             "source": source,
+            "uz_code": uz_code,
         },
     )
 
@@ -169,6 +172,7 @@ async def sync_form_to_google(data: dict, user):
             "last_name": user.last_name or "",
             "consent_phone": data.get("consent_phone", ""),
             "source": data.get("source", "Не указан"),
+            "uz_code": data.get("uz_code", ""),
             "school": data.get("school", ""),
             "class_number": data.get("class_number", ""),
             "specialty_code": data.get("specialty_code", ""),
@@ -197,6 +201,7 @@ async def sync_booking_to_google(user, data: dict, status="Записан на �
             "open_day_time": data.get("open_day_time", ""),
             "booking_status": status,
             "source": data.get("source", "Не указан"),
+            "uz_code": data.get("uz_code", ""),
         },
     )
 
@@ -655,8 +660,20 @@ async def finish_open_day(message: Message, state: FSMContext):
 async def start(message: Message, state: FSMContext):
     await state.clear()
     parts = (message.text or "").split(maxsplit=1)
-    source = parts[1].strip() if len(parts) > 1 else "Не указан"
-    await state.update_data(consent_phone=None, source=source)
+    start_arg = parts[1].strip() if len(parts) > 1 else ""
+    # Для ссылок вида t.me/ИМЯ_БОТА?start=uz_КОД сохраняем код УЗ.
+    uz_code = ""
+    if start_arg.lower().startswith("uz_"):
+        uz_code = start_arg[3:].strip().upper()
+        source = f"УЗ:{uz_code}"
+    else:
+        source = start_arg or "Не указан"
+
+    await state.update_data(
+        consent_phone=None,
+        source=source,
+        uz_code=uz_code,
+    )
 
     # Сразу уведомляем администратора о запуске бота.
     # Номер телефона без отдельной отправки контакта не доступен.
@@ -740,8 +757,11 @@ async def save_contact(message: Message, state: FSMContext):
     phone = contact.phone_number
     current_data = await state.get_data()
     source = current_data.get("source", "Не указан")
+    uz_code = current_data.get("uz_code", "")
     await state.update_data(consent_phone=phone)
-    sheet_saved = await sync_contact_to_google(user, phone, source)
+    sheet_saved = await sync_contact_to_google(
+        user, phone, source, uz_code
+    )
     if not sheet_saved:
         logging.error("Контакт Telegram ID %s не подтверждён Google Sheets.", user.id)
 
