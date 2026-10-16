@@ -104,8 +104,22 @@ def esc(value) -> str:
 
 
 def _send_to_google_sheet(payload: dict) -> bool:
+    action = str(payload.get("action", "unknown"))
+    uz_code = str(payload.get("uz_code", "") or "")
+    logging.info(
+        "GS_SYNC_BEGIN action=%s url_configured=%s secret_configured=%s uz_code=%s",
+        action,
+        bool(GOOGLE_SCRIPT_URL),
+        bool(GOOGLE_SHEET_SECRET),
+        uz_code or "(none)",
+    )
+
     if not GOOGLE_SCRIPT_URL or not GOOGLE_SHEET_SECRET:
-        logging.warning("Google Sheets не настроены: GOOGLE_SCRIPT_URL/GOOGLE_SHEET_SECRET пусты.")
+        logging.error(
+            "GS_SYNC_CONFIG_MISSING url_configured=%s secret_configured=%s",
+            bool(GOOGLE_SCRIPT_URL),
+            bool(GOOGLE_SHEET_SECRET),
+        )
         return False
 
     body = json.dumps(
@@ -123,22 +137,59 @@ def _send_to_google_sheet(payload: dict) -> bool:
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            status_code = getattr(response, "status", None)
             result = response.read().decode("utf-8", errors="replace")
-        logging.info("Google Sheets response: %s", result)
+
+        # Do not log phone numbers, names, or the shared secret.
+        logging.info(
+            "GS_SYNC_HTTP_RESPONSE action=%s status=%s body=%s",
+            action,
+            status_code,
+            result[:1000],
+        )
+
         try:
             parsed = json.loads(result)
-            if isinstance(parsed, dict) and parsed.get("ok") is False:
-                logging.error("Google Apps Script отклонил запрос: %s", parsed.get("error", result))
-                return False
         except (json.JSONDecodeError, TypeError):
-            pass
+            logging.error(
+                "GS_SYNC_INVALID_RESPONSE action=%s response_was_not_json",
+                action,
+            )
+            return False
+
+        if not isinstance(parsed, dict) or parsed.get("ok") is not True:
+            logging.error(
+                "GS_SYNC_REJECTED action=%s error=%s response=%s",
+                action,
+                parsed.get("error", "unexpected_response") if isinstance(parsed, dict) else "unexpected_response",
+                result[:1000],
+            )
+            return False
+
+        logging.info(
+            "GS_SYNC_SUCCESS action=%s row=%s uz_code=%s uz_name=%s",
+            action,
+            parsed.get("row", ""),
+            parsed.get("uz_code", ""),
+            parsed.get("uz_name", ""),
+        )
         return True
+
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")[:1000]
+        logging.error(
+            "GS_SYNC_HTTP_ERROR action=%s status=%s body=%s",
+            action,
+            exc.code,
+            error_body,
+        )
+        return False
     except (urllib.error.URLError, TimeoutError) as exc:
-        logging.exception("Не удалось передать данные в Google Sheets: %s", exc)
+        logging.exception("GS_SYNC_NETWORK_ERROR action=%s error=%s", action, exc)
         return False
     except Exception:
-        logging.exception("Ошибка при передаче данных в Google Sheets.")
+        logging.exception("GS_SYNC_UNEXPECTED_ERROR action=%s", action)
         return False
 
 
@@ -758,12 +809,28 @@ async def save_contact(message: Message, state: FSMContext):
     current_data = await state.get_data()
     source = current_data.get("source", "Не указан")
     uz_code = current_data.get("uz_code", "")
+    logging.info(
+        "CONTACT_HANDLER_STARTED telegram_id=%s source=%s uz_code=%s",
+        user.id,
+        source,
+        uz_code or "(none)",
+    )
     await state.update_data(consent_phone=phone)
     sheet_saved = await sync_contact_to_google(
         user, phone, source, uz_code
     )
+    logging.info(
+        "CONTACT_SYNC_RESULT saved=%s telegram_id=%s uz_code=%s",
+        sheet_saved,
+        user.id,
+        uz_code or "(none)",
+    )
     if not sheet_saved:
-        logging.error("Контакт Telegram ID %s не подтверждён Google Sheets.", user.id)
+        logging.error(
+            "CONTACT_SYNC_FAILED telegram_id=%s uz_code=%s",
+            user.id,
+            uz_code or "(none)",
+        )
 
     try:
         await bot.send_message(
