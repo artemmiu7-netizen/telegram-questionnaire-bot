@@ -111,7 +111,7 @@ def esc(value) -> str:
     return html.escape(str(value or ""))
 
 
-def _send_to_google_sheet(payload: dict) -> bool:
+def _send_to_google_sheet(payload: dict):
     action = str(payload.get("action", "unknown"))
     uz_code = str(payload.get("uz_code", "") or "")
     logging.info(
@@ -182,6 +182,8 @@ def _send_to_google_sheet(payload: dict) -> bool:
             parsed.get("uz_code", ""),
             parsed.get("uz_name", ""),
         )
+        if action == "leadership_summary":
+            return parsed
         return True
 
     except urllib.error.HTTPError as exc:
@@ -217,6 +219,13 @@ async def sync_contact_to_google(
             "source": source,
             "uz_code": uz_code,
         },
+    )
+
+
+async def fetch_leadership_summary():
+    return await asyncio.to_thread(
+        _send_to_google_sheet,
+        {"action": "leadership_summary"},
     )
 
 
@@ -1159,17 +1168,41 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
     elif manager_code:
         logging.warning("MANAGER_CHAT_ID_NOT_CONFIGURED manager_code=%s", manager_code)
 
-    # Руководитель получает уведомление после подтверждения записи в таблицу.
+    # Руководитель получает сводку по всей базе, а не длинную карточку каждого лида.
     try:
-        await bot.send_message(
-            ADMIN_ID,
-            build_admin_message(
+        summary_result = await fetch_leadership_summary()
+        if isinstance(summary_result, dict) and summary_result.get("ok") is True:
+            summary = summary_result.get("summary", {})
+            manager_label = esc(manager_code or "не назначен")
+            new_lead_name = esc(" ".join(
+                part for part in [data.get("surname"), data.get("name"), data.get("patronymic")]
+                if part
+            ) or user.first_name or "не указано")
+            summary_message = (
+                "📊 <b>СВОДКА ММУ — новая анкета сохранена</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                f"🆕 Новый лид: {new_lead_name}\n"
+                f"🏫 УЗ: {esc(data.get('uz_code') or 'общая база')}\n"
+                f"👥 Менеджер: {manager_label}\n\n"
+                f"👤 Всего заявителей: <b>{summary.get('total', 0)}</b>\n"
+                f"🆕 Новые: {summary.get('new', 0)}\n"
+                f"🔄 В работе: {summary.get('in_work', 0)}\n"
+                f"📞 Связались: {summary.get('contacted', 0)}\n"
+                f"🚪 Записаны на ДОД: {summary.get('dod_booked', 0)}\n"
+                f"✅ Пришли на ДОД: {summary.get('dod_attended', 0)}\n"
+                f"🎓 Поступление: {summary.get('admission', 0)}\n"
+                f"⛔ Не заинтересованы: {summary.get('not_interested', 0)}"
+            )
+        else:
+            # Резервный вариант: руководитель всё равно узнаёт о сохранённом лиде.
+            summary_message = build_admin_message(
                 data,
                 user,
                 data.get("consent_phone") or data.get("student_phone") or "не указан",
-            ),
-            parse_mode="HTML",
-        )
+            )
+            logging.error("LEADERSHIP_SUMMARY_UNAVAILABLE; sending lead details as fallback")
+
+        await bot.send_message(ADMIN_ID, summary_message, parse_mode="HTML")
     except Exception:
         logging.exception(
             "FORM_SAVED_ADMIN_NOTIFICATION_FAILED telegram_id=%s",
