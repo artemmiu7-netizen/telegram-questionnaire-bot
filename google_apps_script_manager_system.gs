@@ -11,20 +11,20 @@
  *                   E Ссылка, F Анкет по ссылке, G Статус, H Код менеджера
  */
 
-const MANAGERS_SHEET_NAME = 'Менеджеры';
-const UZ_ASSIGNMENTS_SHEET_NAME = 'Распределение УЗ';
+const MMU_MANAGERS_SHEET_NAME_V2 = 'Менеджеры';
+const MMU_UZ_ASSIGNMENTS_SHEET_NAME_V2 = 'Распределение УЗ';
 const MMU_BOT_USERNAME = 'UniversityQuestionnaireMMUbot';
 
-function setupManagerSystem() {
+function setupMmuManagerSystemV2() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const managers = getOrCreateSheet_(ss, MANAGERS_SHEET_NAME);
-  const assignments = getOrCreateSheet_(ss, UZ_ASSIGNMENTS_SHEET_NAME);
+  const managers = mmuGetOrCreateSheetV2_(ss, MMU_MANAGERS_SHEET_NAME_V2);
+  const assignments = mmuGetOrCreateSheetV2_(ss, MMU_UZ_ASSIGNMENTS_SHEET_NAME_V2);
 
-  ensureManagerHeaders_(managers, [
+  mmuEnsureManagerHeadersV2_(managers, [
     'Имя менеджера', 'Telegram ID', 'Статус',
     'Всего анкет', 'Дата добавления', 'Код менеджера'
   ]);
-  ensureManagerHeaders_(assignments, [
+  mmuEnsureManagerHeadersV2_(assignments, [
     'Имя менеджера', 'Telegram ID менеджера', 'Название УЗ',
     'Код УЗ', 'Ссылка на анкету', 'Анкет по ссылке',
     'Статус', 'Код менеджера'
@@ -43,21 +43,21 @@ function setupManagerSystem() {
   return 'Вкладки менеджеров проверены. Существующие строки сохранены.';
 }
 
-function refreshManagerLinks() {
+function refreshMmuManagerLinksV2() {
   const ss = SpreadsheetApp.openById(SHEET_ID);
-  const managers = ss.getSheetByName(MANAGERS_SHEET_NAME);
-  const assignments = ss.getSheetByName(UZ_ASSIGNMENTS_SHEET_NAME);
+  const managers = ss.getSheetByName(MMU_MANAGERS_SHEET_NAME_V2);
+  const assignments = ss.getSheetByName(MMU_UZ_ASSIGNMENTS_SHEET_NAME_V2);
   const registry = ss.getSheetByName(UZ_REGISTRY_NAME || 'Реестр УЗ');
 
   if (!managers || !assignments || !registry) {
-    throw new Error('Сначала запусти setupManagerSystem() и проверь вкладку «Реестр УЗ».');
+    throw new Error('Сначала запусти setupMmuManagerSystemV2() и проверь вкладку «Реестр УЗ».');
   }
 
-  ensureManagerHeaders_(managers, [
+  mmuEnsureManagerHeadersV2_(managers, [
     'Имя менеджера', 'Telegram ID', 'Статус',
     'Всего анкет', 'Дата добавления', 'Код менеджера'
   ]);
-  ensureManagerHeaders_(assignments, [
+  mmuEnsureManagerHeadersV2_(assignments, [
     'Имя менеджера', 'Telegram ID менеджера', 'Название УЗ',
     'Код УЗ', 'Ссылка на анкету', 'Анкет по ссылке',
     'Статус', 'Код менеджера'
@@ -149,11 +149,11 @@ function refreshManagerLinks() {
   return 'Ссылки обновлены. JSON для Deployka: ' + JSON.stringify(managerJson);
 }
 
-function getOrCreateSheet_(ss, name) {
+function mmuGetOrCreateSheetV2_(ss, name) {
   return ss.getSheetByName(name) || ss.insertSheet(name);
 }
 
-function ensureManagerHeaders_(sh, headers) {
+function mmuEnsureManagerHeadersV2_(sh, headers) {
   const current = sh.getLastColumn() > 0
     ? sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), headers.length)).getValues()[0]
     : [];
