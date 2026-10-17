@@ -39,6 +39,14 @@ UNIVERSITY_ADDRESS = "Ленинградский проспект, д. 17"
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
 GOOGLE_SCRIPT_URL = os.getenv("GOOGLE_SCRIPT_URL", "")
 GOOGLE_SHEET_SECRET = os.getenv("GOOGLE_SHEET_SECRET", "")
+MANAGER_CHAT_IDS_RAW = os.getenv("MANAGER_CHAT_IDS", "{}")
+try:
+    MANAGER_CHAT_IDS = json.loads(MANAGER_CHAT_IDS_RAW)
+    if not isinstance(MANAGER_CHAT_IDS, dict):
+        MANAGER_CHAT_IDS = {}
+except (json.JSONDecodeError, TypeError):
+    MANAGER_CHAT_IDS = {}
+    logging.error("MANAGER_CHAT_IDS должен быть JSON-объектом с кодами менеджеров и Telegram ID.")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в переменных окружения.")
@@ -103,7 +111,7 @@ def esc(value) -> str:
     return html.escape(str(value or ""))
 
 
-def _send_to_google_sheet(payload: dict) -> bool:
+def _send_to_google_sheet(payload: dict):
     action = str(payload.get("action", "unknown"))
     uz_code = str(payload.get("uz_code", "") or "")
     logging.info(
@@ -174,6 +182,8 @@ def _send_to_google_sheet(payload: dict) -> bool:
             parsed.get("uz_code", ""),
             parsed.get("uz_name", ""),
         )
+        if action == "leadership_summary":
+            return parsed
         return True
 
     except urllib.error.HTTPError as exc:
@@ -212,8 +222,15 @@ async def sync_contact_to_google(
     )
 
 
+async def fetch_leadership_summary():
+    return await asyncio.to_thread(
+        _send_to_google_sheet,
+        {"action": "leadership_summary"},
+    )
+
+
 async def sync_form_to_google(data: dict, user):
-    await asyncio.to_thread(
+    return await asyncio.to_thread(
         _send_to_google_sheet,
         {
             "action": "questionnaire",
@@ -740,24 +757,7 @@ async def start(message: Message, state: FSMContext):
         manager_code=manager_code,
     )
 
-    # Сразу уведомляем администратора о запуске бота.
-    # Номер телефона без отдельной отправки контакта не доступен.
-    user = message.from_user
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            (
-                "🟢 <b>Пользователь нажал /start</b>\n\n"
-                f"👤 Имя: {esc(user.first_name or '')} {esc(user.last_name or '')}\n"
-                f"💬 Telegram: {esc('@' + user.username if user.username else 'не указан')}\n"
-                f"🆔 Telegram ID: {user.id}\n"
-                f"📍 Источник: {esc(source)}\n"
-                "📱 Телефон: пока не предоставлен"
-            ),
-            parse_mode="HTML",
-        )
-    except Exception:
-        logging.exception("Не удалось отправить уведомление о /start администратору.")
+    # Уведомляем сотрудников о сохранённом лиде, а не о каждом /start.
 
     opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
@@ -1127,31 +1127,96 @@ async def edit_career(callback: CallbackQuery, state: FSMContext):
 async def submit_form(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = callback.from_user
-    consent_phone = data.get("consent_phone") or data.get("student_phone") or "не указан"
 
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            build_admin_message(data, user, consent_phone),
-            parse_mode="HTML",
+    # Сначала сохраняем анкету в Google Sheets.
+    sheet_saved = await sync_form_to_google(data, user)
+
+    if not sheet_saved:
+        await callback.answer(
+            "Не удалось подтвердить сохранение",
+            show_alert=True,
         )
-    except Exception:
-        logging.exception("Не удалось отправить анкету администратору.")
-        await callback.answer()
-        await callback.message.edit_text(
-            "⚠️ Не удалось отправить анкету. Попробуйте ещё раз."
+        await callback.message.answer(
+            "⚠️ Анкета пока не подтверждена таблицей. "
+            "Попробуйте отправить её ещё раз позже. "
+            "Не закрывайте этот чат."
         )
-        await state.clear()
+        logging.error(
+            "FORM_SYNC_FAILED telegram_id=%s uz_code=%s manager_code=%s",
+            user.id,
+            data.get("uz_code", ""),
+            data.get("manager_code", ""),
+        )
         return
 
-    await callback.answer("Анкета отправлена!")
-    await sync_form_to_google(data, user)
+    # Персональное уведомление назначенному менеджеру (код из ссылки).
+    manager_code = str(data.get("manager_code") or "").strip().upper()
+    manager_chat_id = MANAGER_CHAT_IDS.get(manager_code)
+    if manager_chat_id:
+        try:
+            await bot.send_message(
+                int(manager_chat_id),
+                build_admin_message(
+                    data,
+                    user,
+                    data.get("consent_phone") or data.get("student_phone") or "не указан",
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            logging.exception("MANAGER_NOTIFICATION_FAILED manager_code=%s telegram_id=%s", manager_code, user.id)
+    elif manager_code:
+        logging.warning("MANAGER_CHAT_ID_NOT_CONFIGURED manager_code=%s", manager_code)
+
+    # Руководитель получает сводку по всей базе, а не длинную карточку каждого лида.
+    try:
+        summary_result = await fetch_leadership_summary()
+        if isinstance(summary_result, dict) and summary_result.get("ok") is True:
+            summary = summary_result.get("summary", {})
+            manager_label = esc(manager_code or "не назначен")
+            new_lead_name = esc(" ".join(
+                part for part in [data.get("surname"), data.get("name"), data.get("patronymic")]
+                if part
+            ) or user.first_name or "не указано")
+            summary_message = (
+                "📊 <b>СВОДКА ММУ — новая анкета сохранена</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                f"🆕 Новый лид: {new_lead_name}\n"
+                f"🏫 УЗ: {esc(data.get('uz_code') or 'общая база')}\n"
+                f"👥 Менеджер: {manager_label}\n\n"
+                f"👤 Всего заявителей: <b>{summary.get('total', 0)}</b>\n"
+                f"🆕 Новые: {summary.get('new', 0)}\n"
+                f"🔄 В работе: {summary.get('in_work', 0)}\n"
+                f"📞 Связались: {summary.get('contacted', 0)}\n"
+                f"🚪 Записаны на ДОД: {summary.get('dod_booked', 0)}\n"
+                f"✅ Пришли на ДОД: {summary.get('dod_attended', 0)}\n"
+                f"🎓 Поступление: {summary.get('admission', 0)}\n"
+                f"⛔ Не заинтересованы: {summary.get('not_interested', 0)}"
+            )
+        else:
+            # Резервный вариант: руководитель всё равно узнаёт о сохранённом лиде.
+            summary_message = build_admin_message(
+                data,
+                user,
+                data.get("consent_phone") or data.get("student_phone") or "не указан",
+            )
+            logging.error("LEADERSHIP_SUMMARY_UNAVAILABLE; sending lead details as fallback")
+
+        await bot.send_message(ADMIN_ID, summary_message, parse_mode="HTML")
+    except Exception:
+        logging.exception(
+            "FORM_SAVED_ADMIN_NOTIFICATION_FAILED telegram_id=%s",
+            user.id,
+        )
+
+    await callback.answer("Анкета сохранена!")
 
     await callback.message.edit_text(
-        "✅ <b>Анкета отправлена.</b>\n\n"
+        "✅ <b>Анкета сохранена.</b>\n\n"
         "Спасибо за заполнение!",
         parse_mode="HTML",
     )
+
     await offer_open_day(callback.message, state)
 
 
