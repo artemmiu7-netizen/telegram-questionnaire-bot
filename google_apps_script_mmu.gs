@@ -442,8 +442,11 @@ function getLeadershipSummary_() {
     : [];
   const statusCol = HEADERS.indexOf('Статус лида');
   const managerCodeCol = HEADERS.indexOf('Код менеджера');
+  const validRows = rows.filter(function(row) {
+    return String(row[4] || '').trim() !== '';
+  });
   const counts = {
-    total: rows.length,
+    total: validRows.length,
     new: 0,
     in_work: 0,
     contacted: 0,
@@ -454,7 +457,7 @@ function getLeadershipSummary_() {
   };
   const managerCounts = {};
 
-  rows.forEach(function(row) {
+  validRows.forEach(function(row) {
     const status = String(row[statusCol] || 'Новая').trim();
     if (status === 'Новая') counts.new++;
     if (status === 'В работе') counts.in_work++;
@@ -475,10 +478,14 @@ function getLeadershipSummary_() {
     const headers = managerData[0].map(function(value) { return String(value).trim(); });
     const codeIndex = headers.indexOf('Код менеджера');
     const totalIndex = headers.indexOf('Всего заявок');
-    if (codeIndex !== -1 && totalIndex !== -1) {
+    const formsIndex = headers.indexOf('Всего анкет');
+    if (codeIndex !== -1) {
       for (let i = 1; i < managerData.length; i++) {
         const code = String(managerData[i][codeIndex] || '').trim().toUpperCase();
-        if (code) managers.getRange(i + 1, totalIndex + 1).setValue(managerCounts[code] || 0);
+        if (!code) continue;
+        const count = managerCounts[code] || 0;
+        if (totalIndex !== -1) managers.getRange(i + 1, totalIndex + 1).setValue(count);
+        if (formsIndex !== -1) managers.getRange(i + 1, formsIndex + 1).setValue(count);
       }
     }
   }
