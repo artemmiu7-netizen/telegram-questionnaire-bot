@@ -1127,31 +1127,53 @@ async def edit_career(callback: CallbackQuery, state: FSMContext):
 async def submit_form(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = callback.from_user
-    consent_phone = data.get("consent_phone") or data.get("student_phone") or "не указан"
 
+    # Сначала сохраняем анкету в Google Sheets.
+    sheet_saved = await sync_form_to_google(data, user)
+
+    if not sheet_saved:
+        await callback.answer(
+            "Не удалось подтвердить сохранение",
+            show_alert=True,
+        )
+        await callback.message.answer(
+            "⚠️ Анкета пока не подтверждена таблицей. "
+            "Попробуйте отправить её ещё раз позже. "
+            "Не закрывайте этот чат."
+        )
+        logging.error(
+            "FORM_SYNC_FAILED telegram_id=%s uz_code=%s manager_code=%s",
+            user.id,
+            data.get("uz_code", ""),
+            data.get("manager_code", ""),
+        )
+        return
+
+    # Уведомление руководителю отправляем только после подтверждения записи.
     try:
         await bot.send_message(
             ADMIN_ID,
-            build_admin_message(data, user, consent_phone),
+            build_admin_message(
+                data,
+                user,
+                data.get("consent_phone") or data.get("student_phone") or "не указан",
+            ),
             parse_mode="HTML",
         )
     except Exception:
-        logging.exception("Не удалось отправить анкету администратору.")
-        await callback.answer()
-        await callback.message.edit_text(
-            "⚠️ Не удалось отправить анкету. Попробуйте ещё раз."
+        logging.exception(
+            "FORM_SAVED_ADMIN_NOTIFICATION_FAILED telegram_id=%s",
+            user.id,
         )
-        await state.clear()
-        return
 
-    await callback.answer("Анкета отправлена!")
-    await sync_form_to_google(data, user)
+    await callback.answer("Анкета сохранена!")
 
     await callback.message.edit_text(
-        "✅ <b>Анкета отправлена.</b>\n\n"
+        "✅ <b>Анкета сохранена.</b>\\n\\n"
         "Спасибо за заполнение!",
         parse_mode="HTML",
     )
+
     await offer_open_day(callback.message, state)
 
 
