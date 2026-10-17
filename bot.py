@@ -1169,7 +1169,7 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
     await callback.answer("Анкета сохранена!")
 
     await callback.message.edit_text(
-        "✅ <b>Анкета сохранена.</b>\\n\\n"
+        "✅ <b>Анкета сохранена.</b>\n\n"
         "Спасибо за заполнение!",
         parse_mode="HTML",
     )
