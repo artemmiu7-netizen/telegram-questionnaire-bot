@@ -39,6 +39,14 @@ UNIVERSITY_ADDRESS = "Ленинградский проспект, д. 17"
 CONSENT_TEXT = "Я даю согласие на обработку персональных данных."
 GOOGLE_SCRIPT_URL = os.getenv("GOOGLE_SCRIPT_URL", "")
 GOOGLE_SHEET_SECRET = os.getenv("GOOGLE_SHEET_SECRET", "")
+MANAGER_CHAT_IDS_RAW = os.getenv("MANAGER_CHAT_IDS", "{}")
+try:
+    MANAGER_CHAT_IDS = json.loads(MANAGER_CHAT_IDS_RAW)
+    if not isinstance(MANAGER_CHAT_IDS, dict):
+        MANAGER_CHAT_IDS = {}
+except (json.JSONDecodeError, TypeError):
+    MANAGER_CHAT_IDS = {}
+    logging.error("MANAGER_CHAT_IDS должен быть JSON-объектом с кодами менеджеров и Telegram ID.")
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN не задан в переменных окружения.")
@@ -740,24 +748,7 @@ async def start(message: Message, state: FSMContext):
         manager_code=manager_code,
     )
 
-    # Сразу уведомляем администратора о запуске бота.
-    # Номер телефона без отдельной отправки контакта не доступен.
-    user = message.from_user
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            (
-                "🟢 <b>Пользователь нажал /start</b>\n\n"
-                f"👤 Имя: {esc(user.first_name or '')} {esc(user.last_name or '')}\n"
-                f"💬 Telegram: {esc('@' + user.username if user.username else 'не указан')}\n"
-                f"🆔 Telegram ID: {user.id}\n"
-                f"📍 Источник: {esc(source)}\n"
-                "📱 Телефон: пока не предоставлен"
-            ),
-            parse_mode="HTML",
-        )
-    except Exception:
-        logging.exception("Не удалось отправить уведомление о /start администратору.")
+    # Уведомляем сотрудников о сохранённом лиде, а не о каждом /start.
 
     opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
@@ -1149,7 +1140,26 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
         )
         return
 
-    # Уведомление руководителю отправляем только после подтверждения записи.
+    # Персональное уведомление назначенному менеджеру (код из ссылки).
+    manager_code = str(data.get("manager_code") or "").strip().upper()
+    manager_chat_id = MANAGER_CHAT_IDS.get(manager_code)
+    if manager_chat_id:
+        try:
+            await bot.send_message(
+                int(manager_chat_id),
+                build_admin_message(
+                    data,
+                    user,
+                    data.get("consent_phone") or data.get("student_phone") or "не указан",
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            logging.exception("MANAGER_NOTIFICATION_FAILED manager_code=%s telegram_id=%s", manager_code, user.id)
+    elif manager_code:
+        logging.warning("MANAGER_CHAT_ID_NOT_CONFIGURED manager_code=%s", manager_code)
+
+    # Руководитель получает уведомление после подтверждения записи в таблицу.
     try:
         await bot.send_message(
             ADMIN_ID,
