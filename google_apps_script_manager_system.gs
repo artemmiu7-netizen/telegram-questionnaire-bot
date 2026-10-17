@@ -105,6 +105,7 @@ function refreshMmuManagerLinksV2() {
   const rows = last > 1
     ? assignments.getRange(2, 1, last - 1, 8).getValues()
     : [];
+  const managerTotals = {};
   rows.forEach(function(row, i) {
     const sheetRow = i + 2;
     const managerName = String(row[0] || '').trim();
@@ -131,15 +132,40 @@ function refreshMmuManagerLinksV2() {
       '?start=uz_' + encodeURIComponent(uzCode) +
       '_mgr_' + encodeURIComponent(manager.code);
 
+    // Считаем анкеты из отдельной таблицы УЗ по коду менеджера в поле «Источник».
+    let leadCount = 0;
+    const uzSpreadsheetId = String(uz[2] || '').trim();
+    if (uzSpreadsheetId) {
+      try {
+        const uzSs = SpreadsheetApp.openById(uzSpreadsheetId);
+        const leadSheet = uzSs.getSheetByName('Заявки');
+        if (leadSheet && leadSheet.getLastRow() > 1) {
+          const sources = leadSheet.getRange(2, 22, leadSheet.getLastRow() - 1, 1).getDisplayValues();
+          leadCount = sources.filter(function(item) {
+            return String(item[0] || '').toUpperCase().indexOf('МЕНЕДЖЕР:' + manager.code) >= 0;
+          }).length;
+        }
+      } catch (err) {
+        console.warn('Не удалось посчитать заявки для ' + uzCode + ': ' + err);
+      }
+    }
+
     assignments.getRange(sheetRow, 2).setValue(manager.telegramId);
     assignments.getRange(sheetRow, 3).setValue(String(uz[0] || '').trim());
     assignments.getRange(sheetRow, 4).setValue(uzCode);
     assignments.getRange(sheetRow, 5).setValue(link);
+    assignments.getRange(sheetRow, 6).setValue(leadCount);
     assignments.getRange(sheetRow, 7).setValue(
       manager.status.toLowerCase() === 'неактивен' ? 'Неактивно' : 'Активно'
     );
     assignments.getRange(sheetRow, 8).setValue(manager.code);
     assignments.getRange(sheetRow, 5).setShowHyperlink(true);
+    managerTotals[manager.code] = (managerTotals[manager.code] || 0) + leadCount;
+  });
+
+  managerRows.forEach(function(row, i) {
+    const code = String(row[5] || managers.getRange(i + 2, 6).getDisplayValue()).trim().toUpperCase();
+    if (code) managers.getRange(i + 2, 4).setValue(managerTotals[code] || 0);
   });
 
   managers.getRange(1, 6).setNote('Код используется в персональных ссылках бота. Не меняй вручную без необходимости.');
