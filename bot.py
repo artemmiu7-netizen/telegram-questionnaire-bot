@@ -213,7 +213,7 @@ async def sync_contact_to_google(
 
 
 async def sync_form_to_google(data: dict, user):
-    await asyncio.to_thread(
+    return await asyncio.to_thread(
         _send_to_google_sheet,
         {
             "action": "questionnaire",
