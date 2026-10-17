@@ -224,6 +224,7 @@ async def sync_form_to_google(data: dict, user):
             "consent_phone": data.get("consent_phone", ""),
             "source": data.get("source", "Не указан"),
             "uz_code": data.get("uz_code", ""),
+            "manager_code": data.get("manager_code", ""),
             "school": data.get("school", ""),
             "class_number": data.get("class_number", ""),
             "specialty_code": data.get("specialty_code", ""),
@@ -253,6 +254,7 @@ async def sync_booking_to_google(user, data: dict, status="Записан на �
             "booking_status": status,
             "source": data.get("source", "Не указан"),
             "uz_code": data.get("uz_code", ""),
+            "manager_code": data.get("manager_code", ""),
         },
     )
 
@@ -712,11 +714,22 @@ async def start(message: Message, state: FSMContext):
     await state.clear()
     parts = (message.text or "").split(maxsplit=1)
     start_arg = parts[1].strip() if len(parts) > 1 else ""
-    # Для ссылок вида t.me/ИМЯ_БОТА?start=uz_КОД сохраняем код УЗ.
+
+    # Формат персональной ссылки: /start uz_<КОД_УЗ>_mgr_<КОД_МЕНЕДЖЕРА>
+    # Сохраняем только коды, а не Telegram ID из пользовательского параметра.
     uz_code = ""
+    manager_code = ""
     if start_arg.lower().startswith("uz_"):
-        uz_code = start_arg[3:].strip().upper()
-        source = f"УЗ:{uz_code}"
+        payload = start_arg[3:]
+        lower_payload = payload.lower()
+        marker = "_mgr_"
+        marker_index = lower_payload.find(marker)
+        if marker_index >= 0:
+            uz_code = payload[:marker_index].strip().upper()
+            manager_code = payload[marker_index + len(marker):].strip().upper()
+        else:
+            uz_code = payload.strip().upper()
+        source = f"УЗ:{uz_code}" + (f"; менеджер:{manager_code}" if manager_code else "")
     else:
         source = start_arg or "Не указан"
 
@@ -724,6 +737,7 @@ async def start(message: Message, state: FSMContext):
         consent_phone=None,
         source=source,
         uz_code=uz_code,
+        manager_code=manager_code,
     )
 
     # Сразу уведомляем администратора о запуске бота.
