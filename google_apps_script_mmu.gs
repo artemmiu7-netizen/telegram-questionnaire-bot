@@ -23,7 +23,10 @@ const HEADERS = [
   'Статус лида',
   'Следующий контакт',
   'Комментарий',
-  'Источник'
+  'Источник',
+  'Код специальности',
+  'Код УЗ',
+  'Код менеджера'
 ];
 
 const LEAD_STATUSES = [
@@ -412,6 +415,9 @@ function updateMainRowFromPayload_(sheet, row, body) {
     }
   }
   if (body.source !== undefined) values[21] = body.source;
+  if (body.specialty_code !== undefined) values[22] = body.specialty_code;
+  if (body.uz_code !== undefined) values[23] = body.uz_code;
+  if (body.manager_code !== undefined) values[24] = body.manager_code;
 
   sheet.getRange(row, 1, 1, HEADERS.length).setValues([values]);
   formatNewRow_(sheet, row);
@@ -421,6 +427,63 @@ function doGet() {
   return ContentService
     .createTextOutput('MMU bot Google Sheets endpoint is working')
     .setMimeType(ContentService.MimeType.TEXT);
+}
+
+
+/**
+ * Returns live lead totals and refreshes the manager-count column when available.
+ * The summary action is read-only for the leads table; it never creates a blank lead.
+ */
+function getLeadershipSummary_() {
+  const sheet = getMainSheet_();
+  const lastRow = sheet.getLastRow();
+  const rows = lastRow > 1
+    ? sheet.getRange(2, 1, lastRow - 1, HEADERS.length).getValues()
+    : [];
+  const statusCol = HEADERS.indexOf('Статус лида');
+  const managerCodeCol = HEADERS.indexOf('Код менеджера');
+  const counts = {
+    total: rows.length,
+    new: 0,
+    in_work: 0,
+    contacted: 0,
+    dod_booked: 0,
+    dod_attended: 0,
+    admission: 0,
+    not_interested: 0
+  };
+  const managerCounts = {};
+
+  rows.forEach(function(row) {
+    const status = String(row[statusCol] || 'Новая').trim();
+    if (status === 'Новая') counts.new++;
+    if (status === 'В работе') counts.in_work++;
+    if (status === 'Связались') counts.contacted++;
+    if (status === 'Записан на ДОД') counts.dod_booked++;
+    if (status === 'Пришел на ДОД') counts.dod_attended++;
+    if (status === 'Поступление') counts.admission++;
+    if (status === 'Не заинтересован') counts.not_interested++;
+
+    const managerCode = String(row[managerCodeCol] || '').trim().toUpperCase();
+    if (managerCode) managerCounts[managerCode] = (managerCounts[managerCode] || 0) + 1;
+  });
+
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const managers = ss.getSheetByName('Менеджеры');
+  if (managers && managers.getLastRow() > 1 && managers.getLastColumn() > 0) {
+    const managerData = managers.getDataRange().getDisplayValues();
+    const headers = managerData[0].map(function(value) { return String(value).trim(); });
+    const codeIndex = headers.indexOf('Код менеджера');
+    const totalIndex = headers.indexOf('Всего заявок');
+    if (codeIndex !== -1 && totalIndex !== -1) {
+      for (let i = 1; i < managerData.length; i++) {
+        const code = String(managerData[i][codeIndex] || '').trim().toUpperCase();
+        if (code) managers.getRange(i + 1, totalIndex + 1).setValue(managerCounts[code] || 0);
+      }
+    }
+  }
+
+  return counts;
 }
 
 function doPost(e) {
@@ -433,6 +496,13 @@ function doPost(e) {
           ok: false,
           error: 'unauthorized'
         }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (body.action === 'leadership_summary') {
+      const summary = getLeadershipSummary_();
+      return ContentService
+        .createTextOutput(JSON.stringify({ ok: true, action: 'leadership_summary', summary: summary }))
         .setMimeType(ContentService.MimeType.JSON);
     }
 
