@@ -742,7 +742,27 @@ async def start(message: Message, state: FSMContext):
         manager_code=manager_code,
     )
 
-    # Не отправляем уведомление на каждый /start: администратору приходят только события по заявкам.\n\n    opening_text = (
+    # Уведомляем администратора о запуске бота пользователем, сохраняя источник ссылки.
+    try:
+        username = f"@{message.from_user.username}" if message.from_user.username else "не указан"
+        full_name = " ".join(
+            x for x in [message.from_user.first_name, message.from_user.last_name] if x
+        ) or "не указано"
+        await bot.send_message(
+            ADMIN_ID,
+            "▶️ <b>Новый запуск бота ММУ</b>\\n\\n"
+            f"👤 Имя: {esc(full_name)}\\n"
+            f"💬 Telegram: {esc(username)}\\n"
+            f"🆔 Telegram ID: {message.from_user.id}\\n"
+            f"📍 Источник: {esc(source)}\\n"
+            f"🏫 Код УЗ: {esc(uz_code or 'не указан')}\\n"
+            f"👥 Код менеджера: {esc(manager_code or 'не указан')}",
+            parse_mode="HTML",
+        )
+    except Exception:
+        logging.exception("Не удалось отправить уведомление о запуске бота.")
+
+\n\n    opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
         "Пройдите короткий опросник ММУ, чтобы мы могли "
         "подобрать для вас полезную информацию об университете.\n\n"
