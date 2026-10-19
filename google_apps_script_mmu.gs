@@ -553,3 +553,75 @@ function onOpen() {
     .addItem('Настроить таблицу', 'setupAll')
     .addToUi();
 }
+
+
+/**
+ * Безопасно пересчитывает заявки менеджеров по листу «Заявки».
+ * Не очищает строки и не сбрасывает счётчики в ноль без пересчёта.
+ * Запускать вручную после проверки заголовков.
+ */
+function refreshMmuManagerCountsV2() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const leads = ss.getSheetByName('Заявки');
+  const managers = ss.getSheetByName('Менеджеры');
+
+  if (!leads) throw new Error('Не найдена вкладка «Заявки».');
+  if (!managers) throw new Error('Не найдена вкладка «Менеджеры».');
+
+  const leadLastRow = leads.getLastRow();
+  const leadHeaders = leads.getRange(1, 1, 1, leads.getLastColumn()).getDisplayValues()[0]
+    .map(function(v) { return String(v).trim(); });
+  const managerLastRow = managers.getLastRow();
+  const managerLastCol = managers.getLastColumn();
+
+  if (managerLastRow < 2 || managerLastCol < 1) {
+    return 'На листе «Менеджеры» пока нет менеджеров для пересчёта.';
+  }
+
+  const managerHeaders = managers.getRange(1, 1, 1, managerLastCol).getDisplayValues()[0]
+    .map(function(v) { return String(v).trim(); });
+  const leadIdIndex = leadHeaders.indexOf('Telegram ID');
+  const leadManagerIndex = leadHeaders.indexOf('Код менеджера');
+  const managerCodeIndex = managerHeaders.indexOf('Код менеджера');
+  let totalIndex = managerHeaders.indexOf('Всего заявок');
+  let formsIndex = managerHeaders.indexOf('Всего анкет');
+
+  if (leadIdIndex < 0) throw new Error('На листе «Заявки» нет столбца «Telegram ID».');
+  if (leadManagerIndex < 0) throw new Error('На листе «Заявки» нет столбца «Код менеджера».');
+  if (managerCodeIndex < 0) throw new Error('На листе «Менеджеры» нет столбца «Код менеджера».');
+
+  // Добавляем только отсутствующие столбцы справа, не перезаписывая данные.
+  let nextCol = managerLastCol;
+  if (totalIndex < 0) {
+    nextCol++;
+    managers.getRange(1, nextCol).setValue('Всего заявок');
+    totalIndex = nextCol - 1;
+  }
+  if (formsIndex < 0) {
+    nextCol++;
+    managers.getRange(1, nextCol).setValue('Всего анкет');
+    formsIndex = nextCol - 1;
+  }
+
+  const counts = {};
+  if (leadLastRow > 1) {
+    const rows = leads.getRange(2, 1, leadLastRow - 1, leads.getLastColumn()).getDisplayValues();
+    rows.forEach(function(row) {
+      const telegramId = String(row[leadIdIndex] || '').trim();
+      const code = String(row[leadManagerIndex] || '').trim().toUpperCase();
+      if (telegramId && code) counts[code] = (counts[code] || 0) + 1;
+    });
+  }
+
+  const managerRows = managers.getRange(2, 1, managerLastRow - 1, managers.getLastColumn()).getDisplayValues();
+  managerRows.forEach(function(row, i) {
+    const code = String(row[managerCodeIndex] || '').trim().toUpperCase();
+    if (!code) return;
+    const count = counts[code] || 0;
+    managers.getRange(i + 2, totalIndex + 1).setValue(count);
+    managers.getRange(i + 2, formsIndex + 1).setValue(count);
+  });
+
+  SpreadsheetApp.flush();
+  return 'Пересчёт завершён. Менеджеров обработано: ' + managerRows.length;
+}
