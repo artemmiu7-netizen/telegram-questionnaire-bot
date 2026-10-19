@@ -1027,7 +1027,7 @@ async def other_career(message: Message, state: FSMContext):
     data = await state.get_data()
     if data.get("class_number") == "Колледж":
         await message.answer(
-            "🏷 <b>Код специальности</b>\\n\\nВведите код специальности колледжа:",
+            "🏷 <b>Код специальности</b>\n\nВведите код специальности колледжа:",
             parse_mode="HTML",
             reply_markup=back_keyboard(),
         )
@@ -1141,9 +1141,9 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
         try:
             await bot.send_message(
                 ADMIN_ID,
-                "⚠️ <b>АНКЕТА НЕ ПОДТВЕРЖДЕНА В GOOGLE SHEETS</b>\\n\\n"
-                f"Telegram ID: {user.id}\\n"
-                f"Код УЗ: {esc(data.get('uz_code') or 'не указан')}\\n"
+                "⚠️ <b>АНКЕТА НЕ ПОДТВЕРЖДЕНА В GOOGLE SHEETS</b>\n\n"
+                f"Telegram ID: {user.id}\n"
+                f"Код УЗ: {esc(data.get('uz_code') or 'не указан')}\n"
                 "Проверьте выполнение Apps Script и переменные GOOGLE_SCRIPT_URL / GOOGLE_SHEET_SECRET.",
                 parse_mode="HTML",
             )
@@ -1173,7 +1173,7 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer("Анкета сохранена!")
     await callback.message.edit_text(
-        "✅ <b>Анкета сохранена.</b>\\n\\nСпасибо за заполнение!",
+        "✅ <b>Анкета сохранена.</b>\n\nСпасибо за заполнение!",
         parse_mode="HTML",
     )
     await offer_open_day(callback.message, state)
