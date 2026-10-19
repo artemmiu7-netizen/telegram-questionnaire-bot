@@ -467,7 +467,7 @@ function notifyAssignedManagerSafely_(body, destination, row) {
     }
 
     const chatId = String(manager[idCol] || '').trim();
-    if (!/^\\d+$/.test(chatId)) {
+    if (!/^\d+$/.test(chatId)) {
       console.warn('Некорректный Telegram ID менеджера для кода ' + wanted);
       return false;
     }
