@@ -212,8 +212,9 @@ async def sync_contact_to_google(
     )
 
 
-async def sync_form_to_google(data: dict, user):
-    await asyncio.to_thread(
+async def sync_form_to_google(data: dict, user) -> bool:
+    # Возвращаем подтверждённый результат Apps Script, не скрываем сбой синхронизации.
+    return await asyncio.to_thread(
         _send_to_google_sheet,
         {
             "action": "questionnaire",
@@ -221,6 +222,7 @@ async def sync_form_to_google(data: dict, user):
             "username": f"@{user.username}" if user.username else "",
             "first_name": user.first_name or "",
             "last_name": user.last_name or "",
+            "phone": data.get("consent_phone", ""),
             "consent_phone": data.get("consent_phone", ""),
             "source": data.get("source", "Не указан"),
             "uz_code": data.get("uz_code", ""),
@@ -740,26 +742,7 @@ async def start(message: Message, state: FSMContext):
         manager_code=manager_code,
     )
 
-    # Сразу уведомляем администратора о запуске бота.
-    # Номер телефона без отдельной отправки контакта не доступен.
-    user = message.from_user
-    try:
-        await bot.send_message(
-            ADMIN_ID,
-            (
-                "🟢 <b>Пользователь нажал /start</b>\n\n"
-                f"👤 Имя: {esc(user.first_name or '')} {esc(user.last_name or '')}\n"
-                f"💬 Telegram: {esc('@' + user.username if user.username else 'не указан')}\n"
-                f"🆔 Telegram ID: {user.id}\n"
-                f"📍 Источник: {esc(source)}\n"
-                "📱 Телефон: пока не предоставлен"
-            ),
-            parse_mode="HTML",
-        )
-    except Exception:
-        logging.exception("Не удалось отправить уведомление о /start администратору.")
-
-    opening_text = (
+    # Не отправляем уведомление на каждый /start: администратору приходят только события по заявкам.\n\n    opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
         "Пройдите короткий опросник ММУ, чтобы мы могли "
         "подобрать для вас полезную информацию об университете.\n\n"
@@ -1127,29 +1110,50 @@ async def edit_career(callback: CallbackQuery, state: FSMContext):
 async def submit_form(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     user = callback.from_user
-    consent_phone = data.get("consent_phone") or data.get("student_phone") or "не указан"
+    saved = await sync_form_to_google(data, user)
 
+    if not saved:
+        logging.error(
+            "FORM_SYNC_FAILED telegram_id=%s uz_code=%s",
+            user.id,
+            data.get("uz_code", ""),
+        )
+        try:
+            await bot.send_message(
+                ADMIN_ID,
+                "⚠️ <b>АНКЕТА НЕ ПОДТВЕРЖДЕНА В GOOGLE SHEETS</b>\\n\\n"
+                f"Telegram ID: {user.id}\\n"
+                f"Код УЗ: {esc(data.get('uz_code') or 'не указан')}\\n"
+                "Проверьте выполнение Apps Script и переменные GOOGLE_SCRIPT_URL / GOOGLE_SHEET_SECRET.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            logging.exception("Не удалось уведомить администратора о сбое записи анкеты.")
+
+        await callback.answer("Не удалось сохранить анкету", show_alert=True)
+        await callback.message.answer(
+            "⚠️ <b>Анкета пока не сохранена.</b> Мы не будем сообщать об успешной отправке. "
+            "Пожалуйста, попробуйте ещё раз немного позже или напишите менеджеру.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="💬 Написать менеджеру", url=MANAGER_URL)
+            ]]),
+        )
+        return
+
+    # Уведомляем администратора только после подтверждённой записи в Google Sheets.
     try:
         await bot.send_message(
             ADMIN_ID,
-            build_admin_message(data, user, consent_phone),
+            build_admin_message(data, user, data.get("consent_phone") or "не указан"),
             parse_mode="HTML",
         )
     except Exception:
-        logging.exception("Не удалось отправить анкету администратору.")
-        await callback.answer()
-        await callback.message.edit_text(
-            "⚠️ Не удалось отправить анкету. Попробуйте ещё раз."
-        )
-        await state.clear()
-        return
+        logging.exception("Анкета сохранена, но уведомление администратору не отправлено.")
 
-    await callback.answer("Анкета отправлена!")
-    await sync_form_to_google(data, user)
-
+    await callback.answer("Анкета сохранена!")
     await callback.message.edit_text(
-        "✅ <b>Анкета отправлена.</b>\n\n"
-        "Спасибо за заполнение!",
+        "✅ <b>Анкета сохранена.</b>\\n\\nСпасибо за заполнение!",
         parse_mode="HTML",
     )
     await offer_open_day(callback.message, state)
