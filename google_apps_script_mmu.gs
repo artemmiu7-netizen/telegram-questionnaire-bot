@@ -484,7 +484,7 @@ function notifyAssignedManagerSafely_(body, destination, row) {
       '🔖 <b>Код УЗ:</b> ' + escapeTelegramHtml_(destination.uzCode || 'не указан'),
       '👥 <b>Менеджер:</b> ' + escapeTelegramHtml_(managerName),
       '📌 <b>Статус:</b> ' + escapeTelegramHtml_(lead[18] || 'Новая')
-    ].join('\\n');
+    ].join('\n');
 
     const response = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
       method: 'post',
