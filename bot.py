@@ -750,19 +750,19 @@ async def start(message: Message, state: FSMContext):
         ) or "не указано"
         await bot.send_message(
             ADMIN_ID,
-            "▶️ <b>Новый запуск бота ММУ</b>\\n\\n"
-            f"👤 Имя: {esc(full_name)}\\n"
-            f"💬 Telegram: {esc(username)}\\n"
-            f"🆔 Telegram ID: {message.from_user.id}\\n"
-            f"📍 Источник: {esc(source)}\\n"
-            f"🏫 Код УЗ: {esc(uz_code or 'не указан')}\\n"
+            "▶️ <b>Новый запуск бота ММУ</b>\n\n"
+            f"👤 Имя: {esc(full_name)}\n"
+            f"💬 Telegram: {esc(username)}\n"
+            f"🆔 Telegram ID: {message.from_user.id}\n"
+            f"📍 Источник: {esc(source)}\n"
+            f"🏫 Код УЗ: {esc(uz_code or 'не указан')}\n"
             f"👥 Код менеджера: {esc(manager_code or 'не указан')}",
             parse_mode="HTML",
         )
     except Exception:
         logging.exception("Не удалось отправить уведомление о запуске бота.")
 
-\n\n    opening_text = (
+    opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
         "Пройдите короткий опросник ММУ, чтобы мы могли "
         "подобрать для вас полезную информацию об университете.\n\n"
