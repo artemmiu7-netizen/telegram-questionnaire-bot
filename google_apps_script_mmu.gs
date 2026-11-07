@@ -1,5 +1,9 @@
 const SHEET_ID = '1iRx4N31fSFjg3RE77O4GFdeOHkIjEzWJ6efVvwUqBxs';
-const SECRET = 'Artemmiu77';
+// Секрет хранится в Script Properties, а не в исходном коде.
+// Ключ свойства: GOOGLE_SHEET_SECRET.
+function getSecret_() {
+  return PropertiesService.getScriptProperties().getProperty('GOOGLE_SHEET_SECRET') || '';
+}
 
 const HEADERS = [
   'Дата обновления',
@@ -9,21 +13,24 @@ const HEADERS = [
   'Telegram ID',
   'Телефон Telegram',
   'Согласие',
-  'Школа',
+  'Школа или колледж',
   'Класс',
-  'Фамилия анкеты',
-  'Имя анкеты',
+  'Фамилия',
+  'Имя',
   'Отчество',
-  'Телефон ученика',
+  'Телефон абитуриента',
   'ЕГЭ',
-  'Карьерная сфера',
+  'Сфера интересов',
   'Дата ДОД',
   'Время ДОД',
   'Статус ДОД',
-  'Статус лида',
+  'Статус заявки',
   'Следующий контакт',
   'Комментарий',
-  'Источник'
+  'Источник',
+  'Код специальности',
+  'Код УЗ',
+  'Код менеджера'
 ];
 
 const LEAD_STATUSES = [
@@ -52,13 +59,13 @@ function getMainSheet_() {
 }
 
 function ensureHeaders_(sheet) {
-  const current = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
-  const needsHeaders = current.every(v => String(v || '') === '');
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const current = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  const hasAnyHeader = current.some(v => String(v || '').trim() !== '');
 
-  if (needsHeaders) {
-    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
-  } else {
-    // Добавляем недостающие новые столбцы, не удаляя существующие данные.
+  // Заполняем заголовки только на совершенно пустом листе.
+  // Существующую шапку никогда не перезаписываем.
+  if (!hasAnyHeader) {
     sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
   }
 }
@@ -104,7 +111,7 @@ function formatSheet_() {
   const widths = [
     150, 125, 125, 125, 110, 150, 90,
     180, 75, 135, 125, 135, 150, 200, 190,
-    105, 85, 135, 145, 125, 280, 180
+    105, 85, 135, 145, 125, 280, 180, 150, 120, 135
   ];
 
   widths.forEach((width, index) => {
@@ -412,6 +419,9 @@ function updateMainRowFromPayload_(sheet, row, body) {
     }
   }
   if (body.source !== undefined) values[21] = body.source;
+  if (body.specialty_code !== undefined) values[22] = body.specialty_code;
+  if (body.uz_code !== undefined) values[23] = body.uz_code;
+  if (body.manager_code !== undefined) values[24] = body.manager_code;
 
   sheet.getRange(row, 1, 1, HEADERS.length).setValues([values]);
   formatNewRow_(sheet, row);
@@ -427,7 +437,8 @@ function doPost(e) {
   try {
     const body = JSON.parse((e.postData && e.postData.contents) || '{}');
 
-    if (body.secret !== SECRET) {
+    const configuredSecret = getSecret_();
+    if (!configuredSecret || body.secret !== configuredSecret) {
       return ContentService
         .createTextOutput(JSON.stringify({
           ok: false,
@@ -454,7 +465,9 @@ function doPost(e) {
       .createTextOutput(JSON.stringify({
         ok: true,
         action: body.action || '',
-        row: row
+        row: row,
+        uz_code: body.uz_code || '',
+        manager_code: body.manager_code || ''
       }))
       .setMimeType(ContentService.MimeType.JSON);
 
