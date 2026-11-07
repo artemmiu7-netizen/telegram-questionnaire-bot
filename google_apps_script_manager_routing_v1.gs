@@ -125,6 +125,8 @@ function mmuSyncLeadToManagerBookV1_(masterSs, mainSheet, mainRow, body) {
     mmuEnsureManagerTabHeadersV1_(targetSheet, mainHeaders);
   }
 
+  mmuEnsureGridColumnsV1_(targetSheet, mainLastColumn);
+
   const telegramIdIndex = mmuFindHeaderIndexV1_(mainHeaders, MMU_TELEGRAM_ID_HEADER_V1);
   if (telegramIdIndex < 0) throw new Error('В главном листе нет столбца «Telegram ID».');
   const telegramId = String(leadValues[telegramIdIndex] || body.telegram_id || '').trim();
@@ -222,5 +224,13 @@ function mmuEnsureManagerTabHeadersV1_(sheet, sourceHeaders) {
   if (!hasHeader) {
     sheet.getRange(1, 1, 1, sourceHeaders.length).setValues([sourceHeaders]);
     sheet.setFrozenRows(1);
+  }
+}
+
+
+function mmuEnsureGridColumnsV1_(sheet, requiredColumns) {
+  const currentColumns = sheet.getMaxColumns();
+  if (currentColumns < requiredColumns) {
+    sheet.insertColumnsAfter(currentColumns, requiredColumns - currentColumns);
   }
 }
