@@ -194,7 +194,7 @@ def _send_to_google_sheet(payload: dict) -> bool:
 
 
 async def sync_contact_to_google(
-    user, phone: str, source: str = "", uz_code: str = ""
+    user, phone: str, source: str = "", uz_code: str = "", manager_code: str = ""
 ):
     return await asyncio.to_thread(
         _send_to_google_sheet,
@@ -208,12 +208,13 @@ async def sync_contact_to_google(
             "consent": "Да",
             "source": source,
             "uz_code": uz_code,
+            "manager_code": manager_code,
         },
     )
 
 
 async def sync_form_to_google(data: dict, user):
-    await asyncio.to_thread(
+    return await asyncio.to_thread(
         _send_to_google_sheet,
         {
             "action": "questionnaire",
@@ -823,6 +824,7 @@ async def save_contact(message: Message, state: FSMContext):
     current_data = await state.get_data()
     source = current_data.get("source", "Не указан")
     uz_code = current_data.get("uz_code", "")
+    manager_code = current_data.get("manager_code", "")
     logging.info(
         "CONTACT_HANDLER_STARTED telegram_id=%s source=%s uz_code=%s",
         user.id,
@@ -831,7 +833,7 @@ async def save_contact(message: Message, state: FSMContext):
     )
     await state.update_data(consent_phone=phone)
     sheet_saved = await sync_contact_to_google(
-        user, phone, source, uz_code
+        user, phone, source, uz_code, manager_code
     )
     logging.info(
         "CONTACT_SYNC_RESULT saved=%s telegram_id=%s uz_code=%s",
@@ -1129,6 +1131,29 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
     user = callback.from_user
     consent_phone = data.get("consent_phone") or data.get("student_phone") or "не указан"
 
+    # Сначала получаем подтверждение Google Sheets. Не сообщаем об успешной
+    # отправке, если веб-приложение не подтвердило сохранение анкеты.
+    sheet_saved = await sync_form_to_google(data, user)
+    if not sheet_saved:
+        logging.error(
+            "QUESTIONNAIRE_SYNC_FAILED telegram_id=%s uz_code=%s manager_code=%s",
+            user.id,
+            data.get("uz_code", "") or "(none)",
+            data.get("manager_code", "") or "(none)",
+        )
+        await callback.answer(
+            "Не удалось сохранить анкету. Проверьте подключение и попробуйте ещё раз.",
+            show_alert=True,
+        )
+        await callback.message.edit_text(
+            "⚠️ <b>Анкета пока не сохранена в таблице.</b>\n\n"
+            "Ваши ответы сохранены в текущем сеансе. Нажмите «Поделиться анкетой» ещё раз "
+            "чуть позже или свяжитесь с менеджером.",
+            parse_mode="HTML",
+            reply_markup=summary_keyboard(data),
+        )
+        return
+
     try:
         await bot.send_message(
             ADMIN_ID,
@@ -1136,19 +1161,14 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
             parse_mode="HTML",
         )
     except Exception:
-        logging.exception("Не удалось отправить анкету администратору.")
-        await callback.answer()
-        await callback.message.edit_text(
-            "⚠️ Не удалось отправить анкету. Попробуйте ещё раз."
+        # Анкета уже подтверждённо записана в Google Sheets.
+        logging.exception(
+            "Анкета сохранена в Google Sheets, но уведомление администратору не отправлено."
         )
-        await state.clear()
-        return
 
-    await callback.answer("Анкета отправлена!")
-    await sync_form_to_google(data, user)
-
+    await callback.answer("Анкета сохранена!")
     await callback.message.edit_text(
-        "✅ <b>Анкета отправлена.</b>\n\n"
+        "✅ <b>Анкета сохранена.</b>\n\n"
         "Спасибо за заполнение!",
         parse_mode="HTML",
     )
