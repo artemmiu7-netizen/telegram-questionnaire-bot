@@ -447,8 +447,17 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
+    const telegramId = String(body.telegram_id || '').trim();
+    if (!telegramId) {
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          ok: false,
+          error: 'telegram_id_required'
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     const sheet = getMainSheet_();
-    const telegramId = body.telegram_id;
     let row = findRowByTelegramId_(sheet, telegramId);
 
     if (row === -1) {
