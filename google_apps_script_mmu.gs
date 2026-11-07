@@ -1,9 +1,5 @@
 const SHEET_ID = '1iRx4N31fSFjg3RE77O4GFdeOHkIjEzWJ6efVvwUqBxs';
-// Секрет хранится в Script Properties, а не в исходном коде.
-// Ключ свойства: GOOGLE_SHEET_SECRET.
-function getSecret_() {
-  return PropertiesService.getScriptProperties().getProperty('GOOGLE_SHEET_SECRET') || '';
-}
+const SECRET = 'Artemmiu77';
 
 const HEADERS = [
   'Дата обновления',
@@ -13,24 +9,21 @@ const HEADERS = [
   'Telegram ID',
   'Телефон Telegram',
   'Согласие',
-  'Школа или колледж',
+  'Школа',
   'Класс',
-  'Фамилия',
-  'Имя',
+  'Фамилия анкеты',
+  'Имя анкеты',
   'Отчество',
-  'Телефон абитуриента',
+  'Телефон ученика',
   'ЕГЭ',
-  'Сфера интересов',
+  'Карьерная сфера',
   'Дата ДОД',
   'Время ДОД',
   'Статус ДОД',
-  'Статус заявки',
+  'Статус лида',
   'Следующий контакт',
   'Комментарий',
-  'Источник',
-  'Код специальности',
-  'Код УЗ',
-  'Код менеджера'
+  'Источник'
 ];
 
 const LEAD_STATUSES = [
@@ -59,13 +52,13 @@ function getMainSheet_() {
 }
 
 function ensureHeaders_(sheet) {
-  const lastColumn = Math.max(sheet.getLastColumn(), 1);
-  const current = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
-  const hasAnyHeader = current.some(v => String(v || '').trim() !== '');
+  const current = sheet.getRange(1, 1, 1, HEADERS.length).getValues()[0];
+  const needsHeaders = current.every(v => String(v || '') === '');
 
-  // Заполняем заголовки только на совершенно пустом листе.
-  // Существующую шапку никогда не перезаписываем.
-  if (!hasAnyHeader) {
+  if (needsHeaders) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+  } else {
+    // Добавляем недостающие новые столбцы, не удаляя существующие данные.
     sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
   }
 }
@@ -111,7 +104,7 @@ function formatSheet_() {
   const widths = [
     150, 125, 125, 125, 110, 150, 90,
     180, 75, 135, 125, 135, 150, 200, 190,
-    105, 85, 135, 145, 125, 280, 180, 150, 120, 135
+    105, 85, 135, 145, 125, 280, 180
   ];
 
   widths.forEach((width, index) => {
@@ -419,9 +412,6 @@ function updateMainRowFromPayload_(sheet, row, body) {
     }
   }
   if (body.source !== undefined) values[21] = body.source;
-  if (body.specialty_code !== undefined) values[22] = body.specialty_code;
-  if (body.uz_code !== undefined) values[23] = body.uz_code;
-  if (body.manager_code !== undefined) values[24] = body.manager_code;
 
   sheet.getRange(row, 1, 1, HEADERS.length).setValues([values]);
   formatNewRow_(sheet, row);
@@ -437,8 +427,7 @@ function doPost(e) {
   try {
     const body = JSON.parse((e.postData && e.postData.contents) || '{}');
 
-    const configuredSecret = getSecret_();
-    if (!configuredSecret || body.secret !== configuredSecret) {
+    if (body.secret !== SECRET) {
       return ContentService
         .createTextOutput(JSON.stringify({
           ok: false,
@@ -447,17 +436,8 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
 
-    const telegramId = String(body.telegram_id || '').trim();
-    if (!telegramId) {
-      return ContentService
-        .createTextOutput(JSON.stringify({
-          ok: false,
-          error: 'telegram_id_required'
-        }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-
     const sheet = getMainSheet_();
+    const telegramId = body.telegram_id;
     let row = findRowByTelegramId_(sheet, telegramId);
 
     if (row === -1) {
@@ -474,9 +454,7 @@ function doPost(e) {
       .createTextOutput(JSON.stringify({
         ok: true,
         action: body.action || '',
-        row: row,
-        uz_code: body.uz_code || '',
-        manager_code: body.manager_code || ''
+        row: row
       }))
       .setMimeType(ContentService.MimeType.JSON);
 
