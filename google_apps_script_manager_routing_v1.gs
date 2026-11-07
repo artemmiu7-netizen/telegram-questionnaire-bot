@@ -81,12 +81,15 @@ function mmuSyncLeadToManagerBookV1_(masterSs, mainSheet, mainRow, body) {
     managerSheet.getRange(managerRow, bookIdCol).setValue(managerBookId);
     managerSheet.getRange(managerRow, bookUrlCol).setValue(managerBook.getUrl());
 
-    if (email) {
-      try {
-        managerBook.addEditor(email);
-      } catch (shareError) {
-        console.error('MMU_MANAGER_SHARE_WARNING ' + managerCode + ': ' + shareError);
-      }
+  }
+
+  // Повторно проверяем доступ: это также покрывает случай, когда email
+  // менеджера добавили уже после создания его таблицы.
+  if (email) {
+    try {
+      managerBook.addEditor(email);
+    } catch (shareError) {
+      console.error('MMU_MANAGER_SHARE_WARNING ' + managerCode + ': ' + shareError);
     }
   }
 
@@ -104,7 +107,15 @@ function mmuSyncLeadToManagerBookV1_(masterSs, mainSheet, mainRow, body) {
 
   let targetSheet = managerBook.getSheetByName(tabName);
   if (!targetSheet) {
-    targetSheet = managerBook.insertSheet(tabName);
+    const defaultSheets = managerBook.getSheets();
+    if (defaultSheets.length === 1 &&
+        defaultSheets[0].getLastRow() === 0 &&
+        defaultSheets[0].getLastColumn() === 0) {
+      defaultSheets[0].setName(tabName);
+      targetSheet = defaultSheets[0];
+    } else {
+      targetSheet = managerBook.insertSheet(tabName);
+    }
     targetSheet.getRange(1, 1, 1, mainLastColumn).setValues([mainHeaders]);
     targetSheet.setFrozenRows(1);
     targetSheet.getRange(1, 1, 1, mainLastColumn)
