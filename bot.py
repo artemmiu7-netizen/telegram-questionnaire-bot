@@ -103,6 +103,63 @@ def esc(value) -> str:
     return html.escape(str(value or ""))
 
 
+def normalize_phone(raw) -> str:
+    """Приводит номер к виду 7XXXXXXXXXX (для российских номеров)."""
+    digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    if len(digits) == 11 and digits[0] in "78":
+        return "7" + digits[1:]
+    if len(digits) == 10 and digits[0] == "9":
+        return "7" + digits
+    return digits
+
+
+TEXT_ANSWER_ERROR = (
+    "Пожалуйста, введите ответ обычным текстом "
+    "(без команд и не длиннее 150 символов)."
+)
+
+
+def clean_text_answer(message: Message, max_len: int = 150):
+    """Возвращает текст ответа или None, если ответ не подходит
+    (стикер, фото, команда вроде /command1, слишком длинный текст)."""
+    text = (message.text or "").strip()
+    if not text or text.startswith("/") or len(text) > max_len:
+        return None
+    return text
+
+
+def manager_contact(data: dict):
+    """Имя и ссылка закреплённого менеджера (из листа «Менеджеры»).
+    Если контакт менеджера не указан — менеджер по умолчанию."""
+    contact = (data.get("manager_contact") or "").strip()
+    url = ""
+    if contact.startswith("@") and len(contact) > 1:
+        url = f"https://t.me/{contact[1:]}"
+    elif contact.startswith("https://t.me/"):
+        url = contact
+    elif contact.startswith("t.me/"):
+        url = f"https://{contact}"
+    if not url:
+        return MANAGER_NAME, MANAGER_URL
+    name = (data.get("manager_name") or "").strip() or MANAGER_NAME
+    return name, url
+
+
+async def notify_manager(result, text: str):
+    """Уведомляет менеджера, чья ссылка использована (Telegram ID берётся
+    из листа «Менеджеры» через ответ Apps Script)."""
+    if not isinstance(result, dict):
+        return
+    manager = result.get("manager") or {}
+    chat_id = str(manager.get("telegram_id") or "").strip()
+    if not chat_id.isdigit() or int(chat_id) == ADMIN_ID:
+        return
+    try:
+        await bot.send_message(int(chat_id), text, parse_mode="HTML")
+    except Exception:
+        logging.exception("Не удалось отправить уведомление менеджеру %s.", chat_id)
+
+
 def _send_to_google_sheet(payload: dict) -> bool:
     action = str(payload.get("action", "unknown"))
     uz_code = str(payload.get("uz_code", "") or "")
@@ -174,7 +231,7 @@ def _send_to_google_sheet(payload: dict) -> bool:
             parsed.get("uz_code", ""),
             parsed.get("uz_name", ""),
         )
-        return True
+        return parsed
 
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")[:1000]
@@ -194,7 +251,7 @@ def _send_to_google_sheet(payload: dict) -> bool:
 
 
 async def sync_contact_to_google(
-    user, phone: str, source: str = "", uz_code: str = ""
+    user, phone: str, source: str = "", uz_code: str = "", manager_code: str = ""
 ):
     return await asyncio.to_thread(
         _send_to_google_sheet,
@@ -208,12 +265,13 @@ async def sync_contact_to_google(
             "consent": "Да",
             "source": source,
             "uz_code": uz_code,
+            "manager_code": manager_code,
         },
     )
 
 
 async def sync_form_to_google(data: dict, user):
-    await asyncio.to_thread(
+    return await asyncio.to_thread(
         _send_to_google_sheet,
         {
             "action": "questionnaire",
@@ -222,6 +280,7 @@ async def sync_form_to_google(data: dict, user):
             "first_name": user.first_name or "",
             "last_name": user.last_name or "",
             "consent_phone": data.get("consent_phone", ""),
+            "phone": data.get("consent_phone", ""),
             "source": data.get("source", "Не указан"),
             "uz_code": data.get("uz_code", ""),
             "manager_code": data.get("manager_code", ""),
@@ -605,12 +664,15 @@ async def offer_open_day(message: Message, state: FSMContext):
     await state.set_state(Form.open_day_offer)
 
 
-async def finish_open_day(message: Message, state: FSMContext):
+async def finish_open_day(message: Message, state: FSMContext, user=None):
     data = await state.get_data()
     open_date = data.get("open_day_date")
     open_time = data.get("open_day_time")
 
-    user = message.from_user
+    # message здесь — сообщение бота, поэтому пользователя берём из callback.
+    # Раньше в таблицу попадали Telegram ID и username самого бота.
+    user = user or message.from_user
+    manager_name, manager_url = manager_contact(data)
     if open_date and open_time:
         try:
             selected = datetime.fromisoformat(open_date).date()
@@ -655,6 +717,13 @@ async def finish_open_day(message: Message, state: FSMContext):
             data,
             status="Записан на ДОД",
         )
+        await notify_manager(
+            sheet_saved,
+            "🚪 <b>Запись на День открытых дверей</b>\n\n"
+            f"👤 {esc(full_name)} ({esc(username)})\n"
+            f"📱 {esc(data.get('consent_phone') or 'не указан')}\n"
+            f"📅 {esc(appointment_text)}",
+        )
         if not sheet_saved:
             logging.error(
                 "Запись на ДОД для Telegram ID %s не подтверждена Google Sheets.",
@@ -692,8 +761,8 @@ async def finish_open_day(message: Message, state: FSMContext):
             reply_markup=InlineKeyboardMarkup(
                 inline_keyboard=[
                     [InlineKeyboardButton(
-                        text="💬 Написать Артему",
-                        url=MANAGER_URL,
+                        text=f"💬 Написать менеджеру ({manager_name})",
+                        url=manager_url,
                     )]
                 ]
             ),
@@ -782,6 +851,15 @@ async def start(message: Message, state: FSMContext):
     await state.set_state(Form.consent)
 
 
+@dp.message(Command("cancel"))
+async def cancel_command(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "❌ Заполнение отменено.\n\nНажмите /start для нового заполнения.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+
 @dp.callback_query(Form.consent, F.data == "consent_yes")
 async def consent_yes(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -819,10 +897,11 @@ async def save_contact(message: Message, state: FSMContext):
         )
         return
 
-    phone = contact.phone_number
+    phone = normalize_phone(contact.phone_number)
     current_data = await state.get_data()
     source = current_data.get("source", "Не указан")
     uz_code = current_data.get("uz_code", "")
+    manager_code = current_data.get("manager_code", "")
     logging.info(
         "CONTACT_HANDLER_STARTED telegram_id=%s source=%s uz_code=%s",
         user.id,
@@ -831,11 +910,24 @@ async def save_contact(message: Message, state: FSMContext):
     )
     await state.update_data(consent_phone=phone)
     sheet_saved = await sync_contact_to_google(
-        user, phone, source, uz_code
+        user, phone, source, uz_code, manager_code
+    )
+    if isinstance(sheet_saved, dict) and isinstance(sheet_saved.get("manager"), dict):
+        await state.update_data(
+            manager_name=sheet_saved["manager"].get("name", ""),
+            manager_contact=sheet_saved["manager"].get("contact", ""),
+        )
+    await notify_manager(
+        sheet_saved,
+        "📩 <b>Новый контакт по вашей ссылке</b>\n\n"
+        f"👤 {esc(user.first_name or '')} {esc(user.last_name or '')}\n"
+        f"💬 {esc('@' + user.username if user.username else 'username не указан')}\n"
+        f"📱 {esc(phone)}\n"
+        f"📍 {esc(source)}",
     )
     logging.info(
         "CONTACT_SYNC_RESULT saved=%s telegram_id=%s uz_code=%s",
-        sheet_saved,
+        bool(sheet_saved),
         user.id,
         uz_code or "(none)",
     )
@@ -891,11 +983,11 @@ async def contact_not_shared(message: Message, state: FSMContext):
 # ============================================================
 @dp.message(Form.school)
 async def school(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await state.clear()
-        await start(message, state)
+    value = clean_text_answer(message)
+    if value is None:
+        await message.answer(TEXT_ANSWER_ERROR)
         return
-    await state.update_data(school=message.text.strip())
+    await state.update_data(school=value)
     await ask_surname(message, state)
 
 
@@ -911,36 +1003,73 @@ async def class_selected(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(Form.class_number, F.data == "back")
 async def class_back(callback: CallbackQuery, state: FSMContext):
-    await callback.answer()
-    await callback.message.delete()
-    await ask_school(callback.message, state)
+    await callback.answer("Это первый вопрос анкеты.", show_alert=True)
 
 
 @dp.message(Form.surname)
 async def surname(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await ask_school_type(message, state)
+    value = clean_text_answer(message)
+    if value is None:
+        await message.answer(TEXT_ANSWER_ERROR)
         return
-    await state.update_data(surname=message.text.strip())
+    await state.update_data(surname=value)
     await ask_name(message, state)
 
 
 @dp.message(Form.name)
 async def name(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await ask_surname(message, state)
+    value = clean_text_answer(message)
+    if value is None:
+        await message.answer(TEXT_ANSWER_ERROR)
         return
-    await state.update_data(name=message.text.strip())
+    await state.update_data(name=value)
     await ask_patronymic(message, state)
 
 
 @dp.message(Form.patronymic)
 async def patronymic(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await ask_name(message, state)
+    value = clean_text_answer(message)
+    if value is None:
+        await message.answer(TEXT_ANSWER_ERROR)
         return
-    await state.update_data(patronymic=message.text.strip())
+    await state.update_data(patronymic=value)
     await ask_student_phone(message, state)
+
+
+# Кнопка «⬅️ Назад» на шагах с вводом текста (раньше не работала).
+@dp.callback_query(Form.school, F.data == "back")
+async def school_back(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.delete()
+    await ask_school_type(callback.message, state)
+
+
+@dp.callback_query(Form.surname, F.data == "back")
+async def surname_back(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.delete()
+    await ask_school(callback.message, state)
+
+
+@dp.callback_query(Form.name, F.data == "back")
+async def name_back(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.delete()
+    await ask_surname(callback.message, state)
+
+
+@dp.callback_query(Form.patronymic, F.data == "back")
+async def patronymic_back(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.delete()
+    await ask_name(callback.message, state)
+
+
+@dp.callback_query(Form.specialty_code, F.data == "back")
+async def specialty_code_back(callback: CallbackQuery, state: FSMContext):
+    await callback.answer()
+    await callback.message.delete()
+    await ask_career(callback.message, state)
 
 
 @dp.callback_query(Form.exams, F.data.startswith("exam:"))
@@ -1013,18 +1142,19 @@ async def career_other(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(Form.other_career)
 async def other_career(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await ask_career(message, state)
+    value = clean_text_answer(message)
+    if value is None:
+        await message.answer(TEXT_ANSWER_ERROR)
         return
 
     data = await state.get_data()
     selected = [x for x in data.get("career", []) if not x.startswith("Другое:")]
-    selected.append(f"Другое: {message.text.strip()}")
+    selected.append(f"Другое: {value}")
     await state.update_data(career=selected)
     data = await state.get_data()
     if data.get("class_number") == "Колледж":
         await message.answer(
-            "🏷 <b>Код специальности</b>\\n\\nВведите код специальности колледжа:",
+            "🏷 <b>Код специальности</b>\n\nВведите код специальности колледжа:",
             parse_mode="HTML",
             reply_markup=back_keyboard(),
         )
@@ -1060,12 +1190,9 @@ async def career_done(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(Form.specialty_code)
 async def specialty_code(message: Message, state: FSMContext):
-    if message.text == "⬅️ Назад":
-        await ask_career(message, state)
-        return
-    value = (message.text or "").strip()
-    if not value:
-        await message.answer("Введите код специальности текстом.")
+    value = clean_text_answer(message, 50)
+    if value is None:
+        await message.answer("Введите код специальности текстом (например, 38.02.01).")
         return
     await state.update_data(specialty_code=value)
     await show_summary(message, state)
@@ -1145,7 +1272,11 @@ async def submit_form(callback: CallbackQuery, state: FSMContext):
         return
 
     await callback.answer("Анкета отправлена!")
-    await sync_form_to_google(data, user)
+    form_result = await sync_form_to_google(data, user)
+    await notify_manager(
+        form_result,
+        build_admin_message(data, user, consent_phone),
+    )
 
     await callback.message.edit_text(
         "✅ <b>Анкета отправлена.</b>\n\n"
@@ -1214,13 +1345,15 @@ async def open_again(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(Form.open_day_offer, F.data == "open_return")
 async def open_return(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
+    data = await state.get_data()
+    manager_name, manager_url = manager_contact(data)
     await callback.message.edit_text(
-        f"👤 <b>Ваш менеджер — {MANAGER_NAME}</b>\n"
-        f"💬 Telegram: @{MANAGER_USERNAME}\n\n"
+        f"👤 <b>Ваш менеджер — {esc(manager_name)}</b>\n"
+        f"💬 Telegram: {esc(manager_url)}\n\n"
         "Если захотите записаться позже, можете снова обратиться к менеджеру.",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Написать Артему", url=MANAGER_URL)],
+            [InlineKeyboardButton(text=f"💬 Написать {manager_name}", url=manager_url)],
         ]),
     )
     await state.clear()
@@ -1277,15 +1410,15 @@ async def open_time_selected(callback: CallbackQuery, state: FSMContext):
     await state.update_data(open_day_time=time_value)
     await callback.answer()
 
-    await finish_open_day(callback.message, state)
+    await finish_open_day(callback.message, state, callback.from_user)
 
 
-@dp.message(Command("cancel"))
-async def cancel_command(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        "❌ Заполнение отменено.\n\nНажмите /start для нового заполнения.",
-        reply_markup=ReplyKeyboardRemove(),
+@dp.callback_query()
+async def stale_button(callback: CallbackQuery, state: FSMContext):
+    # Нажата кнопка из старого сообщения — не оставляем «часики».
+    await callback.answer(
+        "Эта кнопка уже неактивна. Нажмите /start, чтобы начать заново.",
+        show_alert=True,
     )
 
 
