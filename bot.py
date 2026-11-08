@@ -831,24 +831,31 @@ async def start(message: Message, state: FSMContext):
     opening_text = (
         "🎓 <b>Добро пожаловать!</b>\n\n"
         "Пройдите короткий опросник ММУ, чтобы мы могли "
-        "подобрать для вас полезную информацию об университете.\n\n"
-        "Перед началом необходимо ваше согласие на обработку персональных данных."
+        "подобрать для вас полезную информацию об университете."
     )
+    site_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🌐 Открыть сайт ММУ", url=UNIVERSITY_URL)
+    ]])
     try:
         await message.answer_photo(
             FSInputFile(SITE_PHOTO),
             caption=opening_text,
             parse_mode="HTML",
+            reply_markup=site_keyboard,
         )
     except (FileNotFoundError, OSError):
-        await message.answer(opening_text, parse_mode="HTML")
+        await message.answer(opening_text, parse_mode="HTML", reply_markup=site_keyboard)
 
+    # Сразу просим номер (отдельного шага согласия нет).
+    # Согласие — нажатие кнопки «Поделиться номером», об этом сказано в тексте.
     await message.answer(
-        f"<b>{esc(CONSENT_TEXT)}</b>",
+        "📱 <b>Поделитесь своим номером телефона</b>\n\n"
+        "Нажмите кнопку «📱 Поделиться номером Telegram» внизу экрана.\n\n"
+        "<i>Нажимая кнопку, вы даёте согласие на обработку персональных данных.</i>",
         parse_mode="HTML",
-        reply_markup=start_keyboard(),
+        reply_markup=phone_share_keyboard(),
     )
-    await state.set_state(Form.consent)
+    await state.set_state(Form.contact)
 
 
 @dp.message(Command("cancel"))
